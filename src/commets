@@ -1,0 +1,24 @@
+
+
+	1. Modelling :
+MuJoCo viewer, and build_scene() adds the wrist camera, the TCP site and the tool.
+A pinhole camera maps a 3D point in the camera frame (X, Y, Z) to pixels
+	- pixel_to_world inverts this: Given a pixel and its depth, you recover the camera-frame point, then use the camera’s pose (rotation R, position t) to get the world point
+	- A pinhole camera maps a 3D point in the camera frame (X, Y, Z) to pixels
+	- the error is defined in 3D, not in the image. The camera finds the cube in pixels, then pixel_to_world converts that to a 3D world position using depth and the calibrated intrinsics. The robot then plans a Cartesian path (pre-grasp → grasp → lift) to that estimated 3D point.
+	- Calibration : once the camera pose is known and the 3D marker positions are known, the projection equations are linear in the unknowns. Each marker gives a row which comes from ordinary least squares ordinary least squares.
+		
+	2. Sensing:  
+Sensors: wrist RGB-D camera and the joint encoders
+
+HSV is used because hue separates colour from brightness, so red is a thresholder band. Red wraps around hue 0, hence the two ranges (0-12 and 168-180).
+		○ a cube seen from above shows its top and some side faces. Side faces are farther away, so averaging all blob pixels biases the centroid. Keeping only pixels near the nearest depth (the 10th percentile plus 6 mm) isolates the top face. The cube centre is then the top point minus half a cube height.
+		○ Rejection tests (too small, touching the image border, not enough valid depth) protect against partial views, which would give a biased centroid.
+	
+	1. Control: The controller makes the robot’s joints follow the plan.
+	- state feedback with computed torque makes the joints follow the planned trajectory
+
+The camera finds the cube in 3D.
+IK converts the grasp positions into joint angles.
+The trajectory generator spreads those angles over time, so the motion is smooth.
+The controller drives the joints to follow that timed plan.
