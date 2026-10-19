@@ -99,3 +99,6 @@ Thumbs.db
 tracking_results.csv
 tracking_results_summary.csv
 tracking_results_tracking.png
+
+# Downloaded UR3e model
+ur3e_download/
