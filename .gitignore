@@ -53,3 +53,52 @@ dkms.conf
 
 # debug information files
 *.dwo
+
+# ============================
+# Python virtual environments
+# ============================
+.venv/
+venv/
+env/
+ENV/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Python build and packaging
+build/
+dist/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Jupyter checkpoints
+.ipynb_checkpoints/
+
+# IDE and editor settings
+.vscode/
+.idea/
+
+# Environment variables and secrets
+.env
+.env.*
+!.env.example
+
+# OS-generated files
+.DS_Store
+Thumbs.db
+
+# Temporary files and logs
+*.log
+*.tmp
+
+# Generated simulation results
+tracking_results.csv
+tracking_results_summary.csv
+tracking_results_tracking.png
+
+# Downloaded UR3e model
+ur3e_download/
