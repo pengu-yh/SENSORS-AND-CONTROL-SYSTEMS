@@ -14,7 +14,7 @@ python -m pip install numpy scipy
 python -m pip install opencv-python
 
 #notes
-# note that the controller is  PD controller the reason its not fully built is due to the nature of the XML being tha the joints are essentially "perfect"
+# note that the controller is  PD controller the reason its not fully built by that i mean its pretty simple rather than a lqr or pid is due to the nature of the XML being tha the joints are essentially "perfect"
 # and have no noise
 # also note that we use PBVS for the camera
 # note that the controller and simulation are positional acutator based
