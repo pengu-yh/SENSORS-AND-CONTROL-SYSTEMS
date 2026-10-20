@@ -22,3 +22,4 @@ python -m pip install opencv-python
 # other than that most of the code is alright and can/should be improved upon
 # u can modify the speed of the simulation if u change the durations in main.py but i wouldnt
 # other than that when u guys present ill probably be asleep as i spent all night fixing my controller so hopefully we pass the simulation
+# BIG NOTE WARNING WARNING BIG LOOK AT THIS ONE, sometimes the simulation but genuinely spawn the box in a unreachable place for the arm, i dont know how to fix this but hey we ball
