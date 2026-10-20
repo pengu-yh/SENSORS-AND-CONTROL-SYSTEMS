@@ -1,5 +1,5 @@
 <mujoco model="ur3e">
-  <compiler angle="radian" meshdir="assets" autolimits="true" />
+  <compiler angle="radian" meshdir="." autolimits="true" />
   <option integrator="implicitfast" timestep="0.002" />
   <default>
     <default class="ur3e">
