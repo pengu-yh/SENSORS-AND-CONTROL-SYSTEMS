@@ -20,7 +20,7 @@ SEED = int(sys.argv[sys.argv.index('--seed') + 1]) if '--seed' in sys.argv else 
 
 
 # Set up the robot and object
-m = mujoco.MjModel.from_xml_path(str(ROOT / 'universal_robots_ur3e/pick_scene.xml'))
+m = mujoco.MjModel.from_xml_path(str(ROOT / 'robot_model/pick_scene.xml'))
 d = mujoco.MjData(m)
 mujoco.mj_resetDataKeyframe(m, d, 0)
 rng = np.random.default_rng(SEED)
