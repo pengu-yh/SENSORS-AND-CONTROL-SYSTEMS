@@ -4,7 +4,7 @@ opencv-python
 matplotlib
 scipy
 
-#run in order
+#run in order, check python ver for something i dont remember
 py -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
