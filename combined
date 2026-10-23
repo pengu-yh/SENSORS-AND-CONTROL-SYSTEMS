@@ -1,0 +1,853 @@
+"""
+ur3e_pick_all.py  -  Track B (single file: scene builder + vision + PBVS + controller): vision-guided pick with a UR3e in MuJoCo (PBVS)
+
+Pipeline per trial
+  1. robot goes to an observation pose (tool pointing down, camera over the table)
+  2. wrist RGB-D image -> red-cube segmentation (HSV) -> depth-based 3D position
+     (calibrated intrinsics + known camera pose)
+  3. position-based visual servoing: pre-grasp -> straight-line descent -> grasp -> lift,
+     joint references from damped-least-squares IK (mj_jacSite)
+  4. joints are driven by a state-space controller:
+        - each joint is a double integrator after computed-torque linearisation
+        - full-state feedback  u = -K (x_hat - x_ref) + a_ref   (pole placement)
+        - Luenberger observer estimates [q, qdot] from noisy q only
+Cube (x, y) is randomised every trial; detection / localisation / pick rates are logged.
+
+Usage:   python ur3e_pick_all.py                 (opens the MuJoCo viewer, 5 trials)
+         python ur3e_pick_all.py --headless --trials 100   (fast batch run for the statistics)
+Output:  stage3_output/  (trials.csv, detection images, trial-0 signals)
+"""
+import argparse
+import csv
+import sys
+import time
+import xml.etree.ElementTree as ET
+from pathlib import Path
+
+import cv2
+import mujoco
+import numpy as np
+
+
+#  SCENE BUILDER (ur3e.xml -> scene) 
+PROJECT_FOLDER = Path(__file__).resolve().parent
+
+#  scene geometry (metres) 
+TABLE_TOP_Z = 0.10          # table is LOW so the wrist camera has room to look down
+TABLE_CENTER_X = 0.45
+CUBE_HALF = 0.025           # 5 cm cube
+CUBE_START_XY = (0.42, 0.0)
+
+# Everything below is expressed in the wrist_3_link frame.
+# From your printed rotation matrix at the home pose: wrist_3 local +Y points
+# world-down (out of the flange), local +Z points world +X, local X is world -Y.
+TCP_Y = 0.12                # tool tip, along the flange axis (+Y)
+CAM_POS = (0.0, 0.09, 0.07) # camera sits 7 cm beside the tool axis, at the flange plane
+CAM_FOVY = 70.0             # vertical field of view, degrees
+
+# 3x3 grid of calibration markers (world frame, on the table)
+CALIB_XS = (0.34, 0.42, 0.50)
+CALIB_YS = (-0.14, 0.0, 0.14)
+MARKER_R = 0.008
+
+
+def build_scene() -> Path:
+    matches = [p for p in PROJECT_FOLDER.rglob("ur3e.xml")]
+    if not matches:
+        raise FileNotFoundError(f"Could not find ur3e.xml under {PROJECT_FOLDER}")
+    model_path = matches[0]
+    scene_path = model_path.with_name("ur3e_vision_scene.xml")
+
+    tree = ET.parse(model_path)
+    root = tree.getroot()
+    worldbody = root.find("worldbody")
+    if worldbody is None:
+        raise RuntimeError("ur3e.xml has no <worldbody>")
+
+    # Torque control: drop position actuators (and anything that refers to them).
+    for tag in ("actuator", "keyframe", "sensor"):
+        for el in root.findall(tag):
+            root.remove(el)
+
+    #  lighting / rendering 
+    visual = root.find("visual")
+    if visual is None:
+        visual = ET.SubElement(root, "visual")
+    headlight = visual.find("headlight")
+    if headlight is None:
+        headlight = ET.SubElement(visual, "headlight")
+    headlight.set("ambient", "0.45 0.45 0.45")
+    headlight.set("diffuse", "0.7 0.7 0.7")
+    headlight.set("specular", "0 0 0")
+    glob = visual.find("global")
+
+    if glob is None:
+        glob = ET.SubElement(visual, "global")
+    glob.set("offwidth", "1280")
+    glob.set("offheight", "960")
+
+    ET.SubElement(worldbody, "light", {
+        "name": "pick_light", "pos": "0.4 0 1.5", "dir": "0 0 -1",
+        "diffuse": "0.6 0.6 0.6"})
+    ET.SubElement(worldbody, "geom", {
+        "name": "pick_floor", "type": "plane", "size": "2 2 0.1",
+        "rgba": "0.85 0.85 0.85 1"})
+
+    #  table (collides with robot and cube) 
+    half_h = TABLE_TOP_Z / 2
+    table = ET.SubElement(worldbody, "body", {
+        "name": "pick_table", "pos": f"{TABLE_CENTER_X} 0 {half_h}"})
+    ET.SubElement(table, "geom", {
+        "name": "table_top", "type": "box",
+        "size": f"0.30 0.35 {half_h}",
+        "rgba": "0.45 0.48 0.52 1",
+        "contype": "3", "conaffinity": "3"})
+
+    #  cube 
+    # contype=4 / conaffinity=2: collides with the table (bit 2) but not with the
+    # robot geoms (bit 1). The "gripper" is an abstraction, see ur3e_pick.py.
+    cx, cy = CUBE_START_XY
+    cube = ET.SubElement(worldbody, "body", {
+        "name": "target_cube",
+        "pos": f"{cx} {cy} {TABLE_TOP_Z + CUBE_HALF}"})
+    ET.SubElement(cube, "freejoint", {"name": "target_cube_free"})
+    ET.SubElement(cube, "geom", {
+        "name": "target_cube_geom", "type": "box",
+        "size": f"{CUBE_HALF} {CUBE_HALF} {CUBE_HALF}",
+        "rgba": "0.95 0.12 0.08 1", "mass": "0.08",
+        "friction": "1.0 0.01 0.001",
+        "contype": "4", "conaffinity": "2"})
+
+    #  calibration markers (visual only; hidden during trials) 
+    markers = ET.SubElement(worldbody, "body", {"name": "calib_markers", "pos": "0 0 0"})
+    k = 0
+    for x in CALIB_XS:
+        for y in CALIB_YS:
+            ET.SubElement(markers, "geom", {
+                "name": f"calib_{k}", "type": "sphere", "size": f"{MARKER_R}",
+                "pos": f"{x} {y} {TABLE_TOP_Z + MARKER_R}",
+                "rgba": "0.1 0.9 0.1 1", "contype": "0", "conaffinity": "0"})
+            k += 1
+
+    #  wrist camera, TCP site, visual tool 
+    wrist = root.find(".//body[@name='wrist_3_link']")
+    if wrist is None:
+        raise RuntimeError("Could not find body 'wrist_3_link' in ur3e.xml")
+
+    # xyaxes = (camera X axis, camera Y axis) in the wrist_3_link frame.
+    # camera X = wrist +X, camera Y(up) = wrist +Z  =>  camera Z = wrist -Y,
+    # and MuJoCo cameras look along -Z, i.e. along wrist +Y: out of the flange.
+    # xyaxes is unit-independent (unlike euler, which can be radians or degrees).
+    ET.SubElement(wrist, "camera", {
+        "name": "wrist_camera",
+        "pos": " ".join(str(v) for v in CAM_POS),
+        "xyaxes": "1 0 0 0 0 1",
+        "fovy": str(CAM_FOVY)})
+    ET.SubElement(wrist, "site", {
+        "name": "tcp", "pos": f"0 {TCP_Y} 0", "size": "0.006",
+        "rgba": "1 1 0 1"})
+    ET.SubElement(wrist, "geom", {
+        "name": "tool_visual", "type": "cylinder",
+        "fromto": f"0 0.09 0  0 {TCP_Y} 0", "size": "0.018",
+        "rgba": "0.15 0.15 0.15 1", "contype": "0", "conaffinity": "0"})
+
+    # Fixed overview camera (for report figures).
+    ET.SubElement(worldbody, "camera", {
+        "name": "overview", "pos": "1.0 -0.9 0.8",
+        "xyaxes": "0.67 0.74 0  -0.3 0.27 0.91", "fovy": "50"})
+
+    tree.write(scene_path, encoding="utf-8", xml_declaration=True)
+    return scene_path
+
+
+#  CONFIG 
+N_TRIALS = 2
+SEED = 1
+
+# Randomisation region for the cube centre (m, world frame)
+X_RANGE = (0.34, 0.46)
+Y_RANGE = (-0.12, 0.12)
+
+WIDTH, HEIGHT = 640, 480
+DT = 0.002                                   
+# simulation = control step
+
+# Observation pose: tool-centre-point target, tool pointing down (world frame)
+
+#Your code estimates the cube's top position and creates three targets:
+# Pre-grasp: above the cube.
+#Grasp: close to its top surface.
+#Lift: above the grasp point.
+OBS_TCP = np.array([0.35, 0.0, 0.30])
+PRE_HEIGHT = 0.12                            
+# pre-grasp height above cube top
+GRASP_CLEAR = 0.003                         
+ # TCP stops this far above the top face
+LIFT_HEIGHT = 0.15
+
+# Controller / observer poles (observer ~5x faster than controller)
+CTRL_POLES = (-12.0, -14.0)
+OBS_POLES = (-60.0, -70.0)
+TORQUE_LIMIT = np.array([56.0, 56.0, 28.0, 12.0, 12.0, 12.0])   # UR3e joint limits (Nm)
+
+# Sensor noise (set to 0 to disable)
+ENC_NOISE_STD = 1e-4                         # rad, joint encoder
+RGB_NOISE_STD = 2.0                          # 8-bit counts
+DEPTH_NOISE_STD = 0.001                      # m
+
+# "Gripper" (suction-style abstraction): attaches if the TCP is this close to the cube top
+GRASP_TOL_XY = 0.012
+GRASP_TOL_Z = (-0.004, 0.012)                # TCP height above true cube top
+SUCCESS_LIFT = 0.08                          # cube must rise this much
+
+# Moving cube: it shuttles back and forth along a line (N_CYCLES round trips) at constant
+# speed, then keeps going and stops abruptly at a random point on that line.
+N_CYCLES = 2                                 # number of back-and-forth round trips
+SLIDE_V0 = (0.25, 0.55)                      # m/s, random constant speed
+SETTLE_TIME = 0.8                            # s, robot waits after the cube stops
+
+MIN_AREA = 300                               # px, smallest accepted red blob
+
+HOME = {
+    "shoulder_pan_joint": 0.0,
+    "shoulder_lift_joint": -1.5708,
+    "elbow_joint": 1.5708,
+    "wrist_1_joint": -1.5708,
+    "wrist_2_joint": -1.5708,
+    "wrist_3_joint": 0.0,
+}
+JOINTS = list(HOME.keys())
+
+OUT = Path(__file__).resolve().parent / "stage3_output"
+OUT.mkdir(exist_ok=True)
+
+
+#  CAMERA 
+def nominal_K():
+    fy = (HEIGHT / 2) / np.tan(np.radians(CAM_FOVY) / 2)
+    return np.array([[fy, 0, (WIDTH - 1) / 2],
+                     [0, fy, (HEIGHT - 1) / 2],
+                     [0, 0, 1.0]])
+
+
+def world_to_pixel(p_w, K, cam_pos, cam_R):
+    """MuJoCo camera frame: x right, y up, z backwards (looks along -z)."""
+    pc = cam_R.T @ (np.asarray(p_w) - cam_pos)
+    X, Y, Z = pc[0], -pc[1], -pc[2]
+    return np.array([K[0, 0] * X / Z + K[0, 2], K[1, 1] * Y / Z + K[1, 2]])
+
+#The camera initially gives me an image coordinate. I use the depth and camera calibration to recover a 3D point, then transform that point into the robot's world coordinate frame
+#The camera detects the cube in image coordinates, \((u,v)\).
+#  Depth and the camera intrinsic matrix convert that pixel into a 3D camera-frame point. 
+# The camera's rotation and position then transform the point into the world frame.
+def pixel_to_world(u, v, depth, K, cam_pos, cam_R):
+    x = (u - K[0, 2]) * depth / K[0, 0]
+    y = -(v - K[1, 2]) * depth / K[1, 1]
+    p_cam = np.array([x, y, -depth])
+    return cam_pos + cam_R @ p_cam
+
+
+class Camera:
+    def __init__(self, model, data, name="wrist_camera"):
+        self.model, self.data, self.name = model, data, name
+        self.id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_CAMERA, name)
+        if self.id < 0:
+            raise RuntimeError(f"camera {name} not found")
+        self.renderer = mujoco.Renderer(model, height=HEIGHT, width=WIDTH)
+        self.K = nominal_K()
+
+    def pose(self):
+        return (self.data.cam_xpos[self.id].copy(),
+                self.data.cam_xmat[self.id].reshape(3, 3).copy())
+
+    def render(self, rng=None, noise=True, name=None):
+        name = name or self.name
+        mujoco.mj_forward(self.model, self.data)
+        self.renderer.update_scene(self.data, camera=name)
+        rgb = self.renderer.render().copy()
+        depth = None
+        if name == self.name:
+            self.renderer.enable_depth_rendering()
+            self.renderer.update_scene(self.data, camera=name)
+            depth = self.renderer.render().copy()
+            self.renderer.disable_depth_rendering()
+        if noise and rng is not None:
+            if RGB_NOISE_STD > 0:
+                rgb = np.clip(rgb + rng.normal(0, RGB_NOISE_STD, rgb.shape), 0, 255).astype(np.uint8)
+            if depth is not None and DEPTH_NOISE_STD > 0:
+                depth = depth + rng.normal(0, DEPTH_NOISE_STD, depth.shape)
+        return rgb, depth
+
+    def calibrate(self):
+        """
+        Intrinsic calibration from known 3D-2D correspondences.
+        9 green markers at known world positions are imaged; with the camera pose
+        known, u = fx*X/Z + cx and v = fy*Y/Z + cy are linear in (fx,cx) and (fy,cy),
+        so they are solved by least squares. Reports reprojection error.
+        """
+        m, d = self.model, self.data
+        gids = [mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_GEOM, f"calib_{i}") for i in range(9)]
+        mujoco.mj_forward(m, d)
+        pts = np.array([d.geom_xpos[g] for g in gids])
+        cam_pos, cam_R = self.pose()
+
+        rgb, _ = self.render(noise=False)
+        hsv = cv2.cvtColor(rgb, cv2.COLOR_RGB2HSV)
+        mask = cv2.inRange(hsv, (40, 100, 60), (85, 255, 255))
+        n, _, stats, cents = cv2.connectedComponentsWithStats(mask)
+        blobs = [cents[i] for i in range(1, n) if stats[i, cv2.CC_STAT_AREA] >= 8]
+
+        # associate blobs with markers using the nominal projection (association only)
+        Kn = nominal_K()
+        pairs = []
+        for p in pts:
+            pred = world_to_pixel(p, Kn, cam_pos, cam_R)
+            if not blobs:
+                break
+            dists = [np.linalg.norm(pred - b) for b in blobs]
+            j = int(np.argmin(dists))
+            if dists[j] < 30:
+                pairs.append((p, blobs[j]))
+        if len(pairs) < 4:
+            print(f"[calibration] only {len(pairs)} markers found - using nominal intrinsics")
+            return self.K
+
+        A_u, b_u, A_v, b_v = [], [], [], []
+        for p, (u, v) in pairs:
+            pc = cam_R.T @ (p - cam_pos)
+            X, Y, Z = pc[0], -pc[1], -pc[2]
+            A_u.append([X / Z, 1]); b_u.append(u)
+            A_v.append([Y / Z, 1]); b_v.append(v)
+        fx, cx = np.linalg.lstsq(np.array(A_u), np.array(b_u), rcond=None)[0]
+        fy, cy = np.linalg.lstsq(np.array(A_v), np.array(b_v), rcond=None)[0]
+        K = np.array([[fx, 0, cx], [0, fy, cy], [0, 0, 1.0]])
+
+        errs = [np.linalg.norm(world_to_pixel(p, K, cam_pos, cam_R) - np.array(b)) for p, b in pairs]
+        print(f"[calibration] {len(pairs)} markers")
+        print(f"  nominal    fx={Kn[0,0]:.2f} fy={Kn[1,1]:.2f} cx={Kn[0,2]:.2f} cy={Kn[1,2]:.2f}")
+        print(f"  calibrated fx={fx:.2f} fy={fy:.2f} cx={cx:.2f} cy={cy:.2f}")
+        print(f"  reprojection error: mean {np.mean(errs):.3f} px, max {np.max(errs):.3f} px")
+        np.savetxt(OUT / "camera_K.txt", K)
+        self.K = K
+        return K
+#The simulated wrist-mounted RGB-D camera captures a colour image and a depth image. 
+# Calibration markers help estimate the camera's intrinsic parameters. 
+# OpenCV then separates red pixels from the background.
+
+#PERCEPTION 
+def red_mask(rgb):
+    hsv = cv2.cvtColor(rgb, cv2.COLOR_RGB2HSV)
+    m = cv2.inRange(hsv, (0, 90, 60), (12, 255, 255)) | cv2.inRange(hsv, (168, 90, 60), (180, 255, 255))
+    return cv2.morphologyEx(m, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
+
+#localise() rejects detections that are too small, cut off at the image boundary, or lack enough valid depth pixels. 
+# It estimates the top face using nearby depth values to reduce errors from the cube's visible side faces.
+def localise(rgb, depth, K, cam_pos, cam_R):
+    """Return dict with estimated cube-top and cube-centre world positions, or None."""
+    m = red_mask(rgb)
+    n, lab, stats, _ = cv2.connectedComponentsWithStats(m)
+    if n <= 1:
+        return None
+    best = 1 + int(np.argmax(stats[1:, cv2.CC_STAT_AREA]))
+    area = int(stats[best, cv2.CC_STAT_AREA])
+    if area < MIN_AREA:
+        return None
+    x, y, w, h = [int(v) for v in stats[best, :4]]
+    if x == 0 or y == 0 or x + w >= WIDTH or y + h >= HEIGHT:
+        return None                                    # cube cut by the image border
+    blob = lab == best
+
+    dvals = depth[blob]
+    dvals = dvals[np.isfinite(dvals) & (dvals > 0)]
+    if dvals.size < MIN_AREA:
+        return None
+    # Top face = nearest surface of the blob. Using only top-face pixels removes the
+    # bias that visible side faces would add to the centroid.
+    d0 = np.percentile(dvals, 10)
+    top = blob & (depth < d0 + 0.006) & (depth > 0)
+    if top.sum() < 50:
+        return None
+    vs, us = np.nonzero(top)
+    u, v = us.mean(), vs.mean()
+    d_top = float(np.median(depth[top]))
+
+    p_top = pixel_to_world(u, v, d_top, K, cam_pos, cam_R)
+    p_ctr = p_top - np.array([0, 0, CUBE_HALF])
+    return dict(p_top=p_top, p_center=p_ctr, uv=(u, v), bbox=(x, y, w, h), area=area, depth=d_top)
+
+
+#IK (PBVS core)
+class IK:
+    """Damped-least-squares 6-D IK on the TCP site, on a private MjData."""
+
+    def __init__(self, model):
+        self.m = model
+        self.d = mujoco.MjData(model)
+        self.sid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SITE, "tcp")
+        jids = [mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, j) for j in JOINTS]
+        self.qadr = np.array([model.jnt_qposadr[j] for j in jids])
+        self.dadr = np.array([model.jnt_dofadr[j] for j in jids])
+        self.lo = np.array([model.jnt_range[j, 0] if model.jnt_limited[j] else -2 * np.pi for j in jids])
+        self.hi = np.array([model.jnt_range[j, 1] if model.jnt_limited[j] else 2 * np.pi for j in jids])
+        self.jp = np.zeros((3, model.nv))
+        self.jr = np.zeros((3, model.nv))
+
+    def fk(self, q):
+        self.d.qpos[self.qadr] = q
+        mujoco.mj_kinematics(self.m, self.d)
+        mujoco.mj_comPos(self.m, self.d)
+        return self.d.site_xpos[self.sid].copy(), self.d.site_xmat[self.sid].reshape(3, 3).copy()
+
+    def solve(self, pos, R_des, q_seed, iters=300, lam=0.05):
+        q = np.array(q_seed, float)
+        for _ in range(iters):
+            p, R = self.fk(q)
+            e_p = pos - p
+            e_r = 0.5 * sum(np.cross(R[:, i], R_des[:, i]) for i in range(3))
+            if np.linalg.norm(e_p) < 2e-4 and np.linalg.norm(e_r) < 2e-3:
+                break
+            mujoco.mj_jacSite(self.m, self.d, self.jp, self.jr, self.sid)
+            J = np.vstack([self.jp[:, self.dadr], self.jr[:, self.dadr]])
+            e = np.concatenate([e_p, e_r])
+            dq = J.T @ np.linalg.solve(J @ J.T + lam ** 2 * np.eye(6), e)
+            n = np.linalg.norm(dq)
+            if n > 0.2:
+                dq *= 0.2 / n
+            q = np.clip(q + dq, self.lo, self.hi)
+        p, R = self.fk(q)
+        e_r = 0.5 * sum(np.cross(R[:, i], R_des[:, i]) for i in range(3))
+        ok = np.linalg.norm(pos - p) < 1e-3 and np.linalg.norm(e_r) < 2e-2
+        return q, ok
+
+    def line(self, p0, p1, R_des, q_seed, n=12):
+        """Joint waypoints along a straight Cartesian line (None if unreachable)."""
+        q, ok = self.solve(p0, R_des, q_seed)
+        if not ok:
+            return None
+        qs = [q]
+        for s in np.linspace(0, 1, n)[1:]:
+            q, ok = self.solve(p0 + (p1 - p0) * s, R_des, qs[-1])
+            if not ok:
+                return None
+            qs.append(q)
+        return np.array(qs)
+
+
+# TRAJECTORIES 
+def min_jerk(s):
+    return 10 * s ** 3 - 15 * s ** 4 + 6 * s ** 5
+
+
+def plan(waypoints, T):
+    """Joint-space reference (q, qdot, qddot) along waypoints with a min-jerk time law."""
+    w = np.atleast_2d(waypoints)
+    if len(w) == 1:
+        w = np.vstack([w, w])
+    n = int(round(T / DT))
+    s = min_jerk(np.arange(n + 1) / n)
+    idx = s * (len(w) - 1)
+    i0 = np.minimum(idx.astype(int), len(w) - 2)
+    f = (idx - i0)[:, None]
+    q = w[i0] * (1 - f) + w[i0 + 1] * f
+    k = 31                                              # smooth waypoint kinks (62 ms)
+    pad = np.pad(q, ((k // 2, k // 2), (0, 0)), mode="edge")
+    ker = np.ones(k) / k
+    q = np.stack([np.convolve(pad[:, j], ker, mode="valid") for j in range(q.shape[1])], axis=1)
+    v = np.gradient(q, DT, axis=0)
+    a = np.gradient(v, DT, axis=0)
+    return q, v, a
+
+
+def hold(q, T):
+    n = int(round(T / DT))
+    return np.tile(q, (n, 1)), np.zeros((n, 6)), np.zeros((n, 6))
+
+
+#  CONTROLLER 
+class StateSpaceController:
+#Reads simulated joint positions with added encoder noise.
+#Uses a Luenberger observer to estimate joint positions and velocities.
+#Calculates feedback corrections when the estimated motion differs from the reference.
+#Uses the MuJoCo mass matrix and dynamic terms to calculate joint torques.
+#Clips the commanded torques to configured limits.
+
+    def __init__(self, model, data, rng):
+        self.m, self.d, self.rng = model, data, rng
+        jids = [mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, j) for j in JOINTS]
+        self.qadr = np.array([model.jnt_qposadr[j] for j in jids])
+        self.dadr = np.array([model.jnt_dofadr[j] for j in jids])
+        p1, p2 = CTRL_POLES
+        self.k1, self.k2 = p1 * p2, -(p1 + p2)
+        o1, o2 = OBS_POLES
+        self.l1, self.l2 = -(o1 + o2), o1 * o2
+        self.Mfull = np.zeros((model.nv, model.nv))
+        self.reset(data.qpos[self.qadr])
+
+    def reset(self, q):
+        self.qh = np.array(q, float)
+        self.vh = np.zeros(6)
+        self.acc = np.zeros(6)
+
+    def step(self, q_ref, v_ref, a_ref):
+        d = self.d
+        y = d.qpos[self.qadr] + self.rng.normal(0, ENC_NOISE_STD, 6)     # measurement
+        innov = y - self.qh
+        qh = self.qh + DT * (self.vh + self.l1 * innov)                  # observer
+        vh = self.vh + DT * (self.acc + self.l2 * innov)
+        self.qh, self.vh = qh, vh
+        acc = a_ref - self.k1 * (qh - q_ref) - self.k2 * (vh - v_ref)    # state feedback
+        self.acc = acc
+        if hasattr(d, "qM"):                                             # MuJoCo <= 3.2
+            mujoco.mj_fullM(self.m, self.Mfull, d.qM)
+        else:                                                            # newer releases
+            mujoco.mj_fullM(self.m, d, self.Mfull)
+        M = self.Mfull[np.ix_(self.dadr, self.dadr)]
+        tau = M @ acc + d.qfrc_bias[self.dadr] - d.qfrc_passive[self.dadr]
+        d.qfrc_applied[self.dadr] = np.clip(tau, -TORQUE_LIMIT, TORQUE_LIMIT)
+
+
+#SIMULATION 
+class PickSim:
+    def __init__(self, model, data, rng, viewer=None, speed=1.0):
+        self.m, self.d, self.rng, self.viewer = model, data, rng, viewer
+        self.speed = speed
+        self.ctrl = StateSpaceController(model, data, rng)
+        self.ik = IK(model)
+        self.cam = Camera(model, data)
+        self.tcp = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SITE, "tcp")
+        self.cube = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "target_cube")
+        cj = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, "target_cube_free")
+        self.cq, self.cv = model.jnt_qposadr[cj], model.jnt_dofadr[cj]
+        self.q_home = np.array([HOME[j] for j in JOINTS])
+        self.attached = False
+        self.rel = None
+        self.slide = None                      # (pos, vel) arrays while the cube is sliding
+        self.slide_k = 0
+        self.log = None
+        self.stats = None
+
+    # helpers
+    def tcp_pose(self):
+        return self.d.site_xpos[self.tcp].copy(), self.d.site_xmat[self.tcp].reshape(3, 3).copy()
+
+    def place_cube(self, x, y):
+        self.d.qpos[self.cq:self.cq + 7] = [x, y, TABLE_TOP_Z + CUBE_HALF, 1, 0, 0, 0]
+        self.d.qvel[self.cv:self.cv + 6] = 0
+
+    def reset(self, cube_xy):
+        mujoco.mj_resetData(self.m, self.d)
+        self.d.qpos[self.ctrl.qadr] = self.q_home
+        self.place_cube(*cube_xy)
+        mujoco.mj_forward(self.m, self.d)
+        self.ctrl.reset(self.q_home)
+        self.attached, self.rel = False, None
+        self.slide, self.slide_k = None, 0
+
+    def start_slide(self, waypoints, v0):
+        """Cube follows the polyline 'waypoints' at CONSTANT speed v0 (instant reversals at the
+        corners), then stops abruptly at the last waypoint."""
+        w = np.asarray(waypoints, float)
+        seg = np.diff(w, axis=0)
+        seg_len = np.linalg.norm(seg, axis=1)
+        L = float(seg_len.sum())
+        T = L / v0
+        n = max(int(np.ceil(T / DT)), 1)
+        dist = np.minimum(np.arange(1, n + 1) * DT * v0, L)           # distance travelled
+        cum = np.concatenate([[0.0], np.cumsum(seg_len)])
+        i = np.minimum(np.searchsorted(cum, dist, side="right") - 1, len(seg) - 1)
+        frac = (dist - cum[i]) / seg_len[i]
+        pos = w[i] + frac[:, None] * seg[i]
+        vel = v0 * seg[i] / seg_len[i][:, None]
+        self.slide, self.slide_k = (pos, vel), 0
+        return T, L
+
+    def drive_cube(self):
+        if self.slide is None:
+            return
+        pos, vel = self.slide
+        k = self.slide_k
+        if k < len(pos):
+            self.d.qpos[self.cq:self.cq + 3] = [pos[k, 0], pos[k, 1], TABLE_TOP_Z + CUBE_HALF]
+            self.d.qvel[self.cv:self.cv + 6] = [vel[k, 0], vel[k, 1], 0, 0, 0, 0]
+            self.slide_k += 1
+        else:
+            self.d.qvel[self.cv:self.cv + 6] = 0
+            self.slide = None
+
+    def attach(self):
+        p, R = self.tcp_pose()
+        pc = self.d.xpos[self.cube].copy()
+        Rc = self.d.xmat[self.cube].reshape(3, 3).copy()
+        self.rel = (R.T @ (pc - p), R.T @ Rc)
+        self.attached = True
+
+    def carry_cube(self):
+        if not self.attached:
+            return
+        p, R = self.tcp_pose()
+        pos = p + R @ self.rel[0]
+        quat = np.zeros(4)
+        mujoco.mju_mat2Quat(quat, (R @ self.rel[1]).flatten())
+        self.d.qpos[self.cq:self.cq + 3] = pos
+        self.d.qpos[self.cq + 3:self.cq + 7] = quat
+        self.d.qvel[self.cv:self.cv + 6] = 0
+
+    def execute(self, ref):
+        q, v, a = ref
+        for k in range(len(q)):
+            self.ctrl.step(q[k], v[k], a[k])
+            mujoco.mj_step(self.m, self.d)
+            self.drive_cube()
+            self.carry_cube()
+            e = self.d.qpos[self.ctrl.qadr] - q[k]
+            ev = self.ctrl.vh - self.d.qvel[self.ctrl.dadr]
+            s = self.stats
+            s["n"] += 1
+            s["q_sq"] += float(e @ e)
+            s["q_max"] = max(s["q_max"], float(np.abs(e).max()))
+            s["obs_sq"] += float(ev @ ev)
+            if self.log is not None:
+                self.log.append(np.concatenate([[self.d.time], self.d.qpos[self.ctrl.qadr],
+                                                self.ctrl.qh, self.d.qvel[self.ctrl.dadr],
+                                                self.ctrl.vh, q[k]]))
+            if self.viewer is not None and (s["n"] % 8 == 0):
+                if not self.viewer.is_running():
+                    sys.exit(0)
+                self.viewer.sync()
+                time.sleep(8 * DT / self.speed)          # real-time playback
+
+    #The simulation checks whether the TCP is within the configured horizontal and vertical tolerances of the cube.
+    #  If it is, attach() records the cube's pose relative to the tool. 
+    # carry_cube() then moves the cube with the tool, and the trial is marked successful if it rises by at least 8 cm.
+
+    # one trial 
+    def run_trial(self, idx, cube_xy, q_obs, R_des, save_images=False, log_signals=False):
+        res = dict(trial=idx, cube_x=cube_xy[0], cube_y=cube_xy[1], detected=0, reachable=0,
+                   loc_err_mm=np.nan, loc_err_xy_mm=np.nan, loc_err_z_mm=np.nan,
+                   grasp_xy_mm=np.nan, grasp_z_mm=np.nan, attached=0, success=0,
+                   slide_len_mm=np.nan, slide_v0=np.nan,
+                   track_rms_mrad=np.nan, track_max_mrad=np.nan, obs_vel_rms=np.nan)
+        self.stats = dict(n=0, q_sq=0.0, q_max=0.0, obs_sq=0.0)
+        self.log = [] if log_signals else None
+        # line along y at the random x; ends of the line = edges of the Y range
+        ends = [np.array([cube_xy[0], Y_RANGE[0]]), np.array([cube_xy[0], Y_RANGE[1]])]
+        if self.rng.random() < 0.5:
+            ends.reverse()
+        A, B = ends
+        stop = np.array(cube_xy, float)
+        v0 = self.rng.uniform(*SLIDE_V0)
+        self.reset(A)
+
+        # 1. go to observation pose, watch the cube shuttle back and forth, stop, then look
+        self.execute(hold(self.q_home, 0.3))
+        self.execute(plan([self.q_home, q_obs], 3.0))
+        self.execute(hold(q_obs, 0.3))
+        route = [A] + [B, A] * N_CYCLES + [stop]       # A->B->A->B->A (2 round trips) -> stop
+        T_slide, L = self.start_slide(route, v0)
+        res["slide_len_mm"], res["slide_v0"] = 1000 * L, v0
+        self.execute(hold(q_obs, T_slide))          # cube moving at constant speed, then stops
+        self.execute(hold(q_obs, SETTLE_TIME))      # cube at rest, then image is taken
+
+        cam_pos, cam_R = self.cam.pose()
+        rgb, depth = self.cam.render(self.rng, noise=True)
+        if save_images:
+            cv2.imwrite(str(OUT / f"trial{idx:02d}_rgb.png"), cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR))
+        det = localise(rgb, depth, self.cam.K, cam_pos, cam_R)
+        truth = self.d.xpos[self.cube].copy()
+        if det is None:
+            self._finish(res)
+            return res
+        res["detected"] = 1
+        err = det["p_center"] - truth
+        res["loc_err_mm"] = 1000 * np.linalg.norm(err)
+        res["loc_err_xy_mm"] = 1000 * np.linalg.norm(err[:2])
+        res["loc_err_z_mm"] = 1000 * err[2]
+        if save_images:
+            ann = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
+            x, y, w, h = det["bbox"]
+            cv2.rectangle(ann, (x, y), (x + w, y + h), (0, 255, 0), 2)
+            cv2.circle(ann, (int(det["uv"][0]), int(det["uv"][1])), 5, (255, 0, 0), -1)
+            gt = world_to_pixel(truth + np.array([0, 0, CUBE_HALF]), self.cam.K, cam_pos, cam_R)
+            cv2.drawMarker(ann, (int(gt[0]), int(gt[1])), (0, 255, 255), cv2.MARKER_CROSS, 14, 2)
+            cv2.imwrite(str(OUT / f"trial{idx:02d}_detection.png"), ann)
+
+        # 2. PBVS: plan from the ESTIMATED position only
+        top = det["p_top"]
+        grasp = np.array([top[0], top[1], top[2] + GRASP_CLEAR])
+        pre = grasp + np.array([0, 0, PRE_HEIGHT])
+        lift = grasp + np.array([0, 0, LIFT_HEIGHT])
+        path_down = self.ik.line(pre, grasp, R_des, q_obs)
+        if path_down is None:
+            self._finish(res)
+            return res
+        path_up = self.ik.line(grasp, lift, R_des, path_down[-1])
+        if path_up is None:
+            self._finish(res)
+            return res
+        res["reachable"] = 1
+
+        self.execute(plan([q_obs, path_down[0]], 2.5))
+        self.execute(hold(path_down[0], 0.4))
+        self.execute(plan(path_down, 2.0))
+        self.execute(hold(path_down[-1], 0.5))
+
+        # 3. grasp check (virtual suction gripper)
+        p_tcp, _ = self.tcp_pose()
+        true_top = self.d.xpos[self.cube] + np.array([0, 0, CUBE_HALF])
+        dxy = np.linalg.norm((p_tcp - true_top)[:2])
+        dz = p_tcp[2] - true_top[2]
+        res["grasp_xy_mm"] = 1000 * dxy
+        res["grasp_z_mm"] = 1000 * dz
+        if dxy <= GRASP_TOL_XY and GRASP_TOL_Z[0] <= dz <= GRASP_TOL_Z[1]:
+            self.attach()
+            res["attached"] = 1
+
+        # 4. lift
+        z0 = self.d.xpos[self.cube][2]
+        self.execute(plan(path_up, 2.0))
+        self.execute(hold(path_up[-1], 0.5))
+        lifted = self.d.xpos[self.cube][2] - z0
+        res["success"] = int(self.attached and lifted >= SUCCESS_LIFT)
+        self._finish(res)
+        return res
+
+    def _finish(self, res):
+        s = self.stats
+        if s["n"]:
+            res["track_rms_mrad"] = 1000 * np.sqrt(s["q_sq"] / (6 * s["n"]))
+            res["track_max_mrad"] = 1000 * s["q_max"]
+            res["obs_vel_rms"] = np.sqrt(s["obs_sq"] / (6 * s["n"]))
+
+
+#  MAIN 
+def check_workspace(sim, R_des, q_seed):
+    """Reachability scan of the randomisation box (grasp and pre-grasp, tool down)."""
+    ok, tot = 0, 0
+    for x in np.linspace(*X_RANGE, 5):
+        for y in np.linspace(*Y_RANGE, 5):
+            top = np.array([x, y, TABLE_TOP_Z + 2 * CUBE_HALF + GRASP_CLEAR])
+            tot += 1
+            _, g = sim.ik.solve(top, R_des, q_seed)
+            _, p = sim.ik.solve(top + [0, 0, PRE_HEIGHT + 0.0], R_des, q_seed)
+            _, l = sim.ik.solve(top + [0, 0, LIFT_HEIGHT], R_des, q_seed)
+            ok += int(g and p and l)
+    print(f"[workspace] {ok}/{tot} grid points in the cube box are reachable (tool down)")
+    if ok < tot:
+        print("  -> shrink X_RANGE / Y_RANGE or lower TABLE_TOP_Z if this is low")
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--trials", type=int, default=None, help="default: 5 with viewer, 25 headless")
+    ap.add_argument("--seed", type=int, default=SEED)
+    ap.add_argument("--headless", action="store_true", help="no viewer window (fast batch run)")
+    ap.add_argument("--speed", type=float, default=1.0, help="viewer playback speed (1 = real time)")
+    args = ap.parse_args()
+    args.view = not args.headless
+    if args.trials is None:
+        args.trials = 5 if args.view else N_TRIALS
+
+    scene = build_scene()
+    print("Scene:", scene)
+    model = mujoco.MjModel.from_xml_path(str(scene))
+    model.opt.timestep = DT
+    data = mujoco.MjData(model)
+    rng = np.random.default_rng(args.seed)
+
+    viewer = None
+    ctx = None
+    if args.view:
+        from mujoco import viewer as mj_viewer
+        ctx = mj_viewer.launch_passive(model, data)
+        viewer = ctx.__enter__()
+
+    if viewer is not None:                        # camera looking at robot + table
+        viewer.cam.lookat[:] = [0.30, 0.0, 0.15]
+        viewer.cam.distance = 1.3
+        viewer.cam.azimuth = 140
+        viewer.cam.elevation = -25
+    sim = PickSim(model, data, rng, viewer, args.speed)
+    CUBE_PARK = (0.62, 0.28)               # park cube out of the calibration view
+    sim.reset(CUBE_PARK)
+
+    # sanity check of the camera / tool convention 
+    _, R_des = sim.tcp_pose()
+    tool_axis = R_des[:, 1]      # wrist_3 local +Y
+    cam_pos, cam_R = sim.cam.pose()
+    look = -cam_R[:, 2]
+    print("Home TCP (m):", np.round(sim.tcp_pose()[0], 3))
+    print("Tool axis (wrist_3 +Y) in world:", np.round(tool_axis, 3), "(want ~[0 0 -1])")
+    print("Camera view direction in world: ", np.round(look, 3), "(want ~[0 0 -1])")
+    if tool_axis[2] > -0.9 or look[2] > -0.9:
+        print("WARNING: tool/camera not pointing down at HOME; the flange axis of your model may "
+              "not be wrist_3 +Y. Fix TCP_Y/CAM_POS/xyaxes in ur3e_vision_scene.py.")
+
+    #  observation pose via IK 
+    q_obs, ok = sim.ik.solve(OBS_TCP, R_des, sim.q_home)
+    if not ok:
+        raise RuntimeError("Observation pose not reachable: change OBS_TCP in the CONFIG block")
+    check_workspace(sim, R_des, q_obs)
+
+    # camera calibration at the observation pose 
+    sim.reset(CUBE_PARK)
+    sim.stats = dict(n=0, q_sq=0.0, q_max=0.0, obs_sq=0.0)
+    sim.execute(plan([sim.q_home, q_obs], 3.0))
+    sim.execute(hold(q_obs, 1.0))
+    sim.cam.calibrate()
+    # hide markers for the trials
+    for i in range(9):
+        gid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, f"calib_{i}")
+        model.geom_rgba[gid, 3] = 0.0
+
+    # trials 
+    rows = []
+    t0 = time.time()
+    for i in range(args.trials):
+        xy = (rng.uniform(*X_RANGE), rng.uniform(*Y_RANGE))
+        res = sim.run_trial(i, xy, q_obs, R_des, save_images=(i < 3), log_signals=(i == 0))
+        if i == 0 and sim.log:
+            arr = np.array(sim.log)
+            np.savez(OUT / "trial0_signals.npz", t=arr[:, 0], q=arr[:, 1:7], q_hat=arr[:, 7:13],
+                     qd=arr[:, 13:19], qd_hat=arr[:, 19:25], q_ref=arr[:, 25:31])
+        rows.append(res)
+        print(f"trial {i:02d}  cube=({xy[0]:.3f},{xy[1]:+.3f})  det={res['detected']}  "
+              f"loc_err={res['loc_err_mm']:.1f} mm  grasp_xy={res['grasp_xy_mm']:.1f} mm  "
+              f"attached={res['attached']}  success={res['success']}")
+
+    # save + summary 
+    with open(OUT / "trials.csv", "w", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
+        w.writeheader()
+        w.writerows(rows)
+
+    def col(k):
+        return np.array([r[k] for r in rows], float)
+
+    n = len(rows)
+    det, reach, att, suc = col("detected"), col("reachable"), col("attached"), col("success")
+    le = col("loc_err_mm")[det == 1]
+    print("\n================ SUMMARY ================")
+    print(f"trials                : {n}   (wall time {time.time() - t0:.0f} s)")
+    print(f"detection rate        : {det.mean() * 100:.0f} %")
+    print(f"IK-reachable rate     : {reach.mean() * 100:.0f} %")
+    print(f"grasp (attach) rate   : {att.mean() * 100:.0f} %")
+    print(f"pick success rate     : {suc.mean() * 100:.0f} %")
+    if le.size:
+        print(f"localisation error    : mean {le.mean():.2f} mm, std {le.std():.2f}, max {le.max():.2f} mm")
+        print(f"   xy {np.nanmean(col('loc_err_xy_mm')):.2f} mm, z bias {np.nanmean(col('loc_err_z_mm')):.2f} mm")
+    print(f"joint tracking error  : RMS {np.nanmean(col('track_rms_mrad')):.2f} mrad, "
+          f"worst {np.nanmax(col('track_max_mrad')):.1f} mrad")
+    print(f"observer velocity err : RMS {np.nanmean(col('obs_vel_rms')):.4f} rad/s")
+    print(f"files in {OUT}")
+
+    if ctx is not None:
+        print("Trials finished - close the MuJoCo window to exit.")
+        while viewer.is_running():
+            viewer.sync()
+            time.sleep(0.05)
+        ctx.__exit__(None, None, None)
+    sim.cam.renderer.close()          # avoids the GLFW teardown traceback on Windows
+
+
+if __name__ == "__main__":
+    main()
