@@ -1,104 +1,14 @@
-# Prerequisites
-*.d
-
-# Object files
-*.o
-*.ko
-*.obj
-*.elf
-
-# Linker output
-*.ilk
-*.map
-*.exp
-
-# Precompiled Headers
-*.gch
-*.pch
-
-# Libraries
-*.lib
-*.a
-*.la
-*.lo
-
-# Shared objects (inc. Windows DLLs)
-*.dll
-*.so
-*.so.*
-*.dylib
-
-# Executables
-*.exe
-*.out
-*.app
-*.i*86
-*.x86_64
-*.hex
-
-# Debug files
-*.dSYM/
-*.su
-*.idb
-*.pdb
-
-# Kernel Module Compile Results
-*.mod*
-*.cmd
-.tmp_versions/
-modules.order
-Module.symvers
-Mkfile.old
-dkms.conf
-
-# debug information files
-*.dwo
-
-# ============================
-# Python virtual environments
-# ============================
-.venv/
-venv/
-env/
-ENV/
-
-# Python cache
+# Python
 __pycache__/
 *.py[cod]
-*$py.class
-
-# Python build and packaging
-build/
-dist/
-*.egg-info/
+.venv/
+venv/
 .pytest_cache/
-.mypy_cache/
-.ruff_cache/
-
-# Jupyter checkpoints
-.ipynb_checkpoints/
-
-# IDE and editor settings
-.vscode/
-.idea/
-
-# Environment variables and secrets
-.env
-.env.*
-!.env.example
-
-# OS-generated files
+# Generated results
+results/
+test_*_results/
+tracking_*.csv
+# OS/editor
 .DS_Store
 Thumbs.db
-
-# Temporary files and logs
-*.log
-*.tmp
-
-# Generated simulation results
-tracking_results.csv
-tracking_results_summary.csv
-tracking_results_tracking.png
-
-# Downloaded UR3e model
-ur3e_download/
+.vscode/
