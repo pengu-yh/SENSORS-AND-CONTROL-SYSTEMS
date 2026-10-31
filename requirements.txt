@@ -5,13 +5,13 @@ matplotlib
 scipy
 
 #run in order, check python ver for something i dont remember
-py -m venv .venv
-.\.venv\Scripts\Activate.ps1
-python -m pip install --upgrade pip
-python -m pip install --upgrade pip setuptools wheel
-python -m pip install --only-binary=:all: mujoco
-python -m pip install numpy scipy 
-python -m pip install opencv-python
+# py -m venv .venv
+# .\.venv\Scripts\Activate.ps1
+# python -m pip install --upgrade pip
+# python -m pip install --upgrade pip setuptools wheel
+# python -m pip install --only-binary=:all: mujoco
+# python -m pip install numpy scipy 
+# python -m pip install opencv-python
 
 #notes
 # note that the controller is  PD controller the reason its not fully built by that i mean its pretty simple rather than a lqr or pid is due to the nature of the XML being tha the joints are essentially "perfect"
