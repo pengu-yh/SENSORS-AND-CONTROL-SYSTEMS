@@ -7,7 +7,7 @@
     <default class="ur3e">
       <material specular="0.5" shininess="0.25"/>
       <joint axis="0 1 0" range="-6.28319 6.28319" armature="0.1"/>
-      <general gaintype="fixed" biastype="affine" ctrlrange="-6.2831 6.2831"/>
+
       <default class="size2">
         <general  gainprm="1000" biasprm="0 -1000 -200" forcerange="-56 56"/>
       </default>
