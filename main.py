@@ -6,7 +6,7 @@ import argparse
 import csv
 import time
 from pathlib import Path
-
+import cv2
 import mujoco
 import mujoco.viewer
 import numpy as np
@@ -15,6 +15,7 @@ from src.perception.sensing import camera
 from src.estimation.cube_ekf import CubeEKF
 from src.control.ik import make_ik
 from src.control.controller import make_controller
+from src.estimation.joint_observer import JointObserver
 
 ROOT = Path(__file__).resolve().parent
 ap = argparse.ArgumentParser()
@@ -44,14 +45,30 @@ box_geom_id = m.geom('box_geom').id
 tool_id = m.body('tool').id
 suction_id = m.equality('suction').id
 check = mujoco.MjData(m)
+est = mujoco.MjData(m)          # model evaluated at the ESTIMATE
+ENC_STD = 5e-4                  # simulated encoder noise [rad]
+BOX_MASS0 = float(m.body_mass[box_id])
+BOX_INERTIA0 = m.body_inertia[box_id].copy()
+LIGHT0 = m.light_diffuse.copy()
 vel_cap = 0.6
 damping = 0.03
 sample_dt = 0.1
 PATHS = ('horizontal','vertical','diagonal','square','circle','zigzag')
 # Conservative workspace for THIS MuJoCo workcell, not the full UR3e workspace.
 # Each candidate is additionally validated by IK and joint control limits.
-XY_MIN = np.array([0.235, 0.065])
-XY_MAX = np.array([0.305, 0.135])
+XY_MIN = np.array([0.20, 0.04])
+XY_MAX = np.array([0.34, 0.16])
+
+def read_encoders(d, rng):
+    """SIMULATED SENSOR: the simulator's true joint angles corrupted by encoder noise.
+    This is the only place true joint state enters the control pipeline."""
+    return d.qpos[:6] + rng.normal(0, ENC_STD, 6)
+
+def tcp_from(q):
+    """Cup-tip position from joint angles q (forward kinematics on the private model)."""
+    est.qpos[:6] = q
+    mujoco.mj_kinematics(m, est)
+    return est.site_xpos[tcp_id].copy()
 
 def smooth(u):
     u = np.clip(u, 0.0, 1.0)
@@ -118,7 +135,7 @@ def reachable_preflight(kind, centre, q_seed, pause_duration):
                 pc = R.T @ (np.array([*xy,0.04])-cpos)
                 if pc[2] <= 0.05:
                     return False, 'cube behind camera at tracking pose'
-                f = (240/2)/np.tan(np.deg2rad(float(m.cam_fovy[cid]))/2)
+                f = (480/2)/np.tan(np.deg2rad(float(m.cam_fovy[cid]))/2)
                 uv = np.array([320,240])+f*pc[:2]/pc[2]
                 if not (30 < uv[0] < 610 and 30 < uv[1] < 450):
                     return False, f'cube outside camera image margin: {uv.round(1)}'
@@ -133,13 +150,24 @@ def run_trial(seed, trajectory):
     global initial_height, rows, seen, accepted, lost, ik_fail, clip_frames
     global max_joint_error, max_ff, check_target, aborts, countdown_started
     global false_pick, stable_time, tracking_resume, paused_frames_seen
+    global q_hat, qd_hat
     rng = np.random.default_rng(seed)
+    fric = rng.uniform(0.5, 1.2)                      # cube friction coefficient
+    mass = rng.uniform(0.02, 0.08)                    # cube mass [kg]
+    light = rng.uniform(0.6, 1.2)                     # lighting scale
+    m.geom_friction[box_geom_id, 0] = fric
+    m.body_mass[box_id] = mass
+    m.body_inertia[box_id] = BOX_INERTIA0 * mass / BOX_MASS0    # keep inertia consistent with mass
+    m.light_diffuse[:] = LIGHT0 * light
+    m.geom_friction[box_geom_id, 0] = rng.uniform(0.5, 1.2)      # cube friction
+    m.body_mass[box_id] = rng.uniform(0.02, 0.08)                # cube mass [kg]
+    m.light_ambient[:] = rng.uniform(0.2, 0.4)                   # lighting
     pause_duration = args.pause_frames*sample_dt
     d = mujoco.MjData(m)
     mujoco.mj_resetDataKeyframe(m, d, 0)
     # Conservative variation: small initial cube offsets around validated work area.
-    centre = np.array([0.27 + rng.uniform(-0.004, 0.004),
-                       0.09 + rng.uniform(-0.004, 0.004)])
+    centre = np.array([0.27 + rng.uniform(-0.015, 0.015),
+                       0.09 + rng.uniform(-0.015, 0.015)])
     d.qpos[box_qpos:box_qpos+2] = centre
     q_scan = np.asarray(ik(np.array([0.27, 0.10, 0.30]), d.qpos[:6].copy()), float)
     if not np.all(np.isfinite(q_scan)):
@@ -149,12 +177,13 @@ def run_trial(seed, trajectory):
         return dict(seed=seed, trajectory=trajectory, final_stage='PREFLIGHT_REJECT',
                     success=0, failure_reason=reason, rows=[])
     d.qpos[:6] = q_scan
-    d.ctrl[:6] = q_scan
     d.eq_active[suction_id] = False
     mujoco.mj_forward(m, d)
     cam = camera(m, seed=seed)
     ekf = CubeEKF(dt=sample_dt, K=cam.K, top_z=cam.top_z)
-    controller = make_controller(m, q0=q_scan)
+    controller = make_controller(m, q0=q_scan) 
+    enc_rng = np.random.default_rng(seed + 1000)
+    obs = JointObserver(m.opt.timestep, ENC_STD, accel_std=1.0)                    
     q_ref = q_scan.copy()
     qd_ref = np.zeros(6)
     last_detection = None
@@ -193,17 +222,25 @@ def run_trial(seed, trajectory):
                 xy = motion_xy(trajectory,t,centre,args.pause_start,pause_duration,args.stop_time)
                 xy_next = motion_xy(trajectory,t+0.001,centre,args.pause_start,pause_duration,args.stop_time)
                 d.qpos[box_qpos:box_qpos+2] = xy
-                d.qvel[box_dof:box_dof+2] = (xy_next-xy)/0.001
+                d.qvel[box_dof:box_dof+2] = (xy_next-xy)/0.001 
                 d.qvel[box_dof+2:box_dof+6] = 0.0
                 d.qpos[box_qpos+2] = 0.02
                 d.qpos[box_qpos+3:box_qpos+7] = [1, 0, 0, 0]
             mujoco.mj_forward(m, d)
+            z = read_encoders(d, enc_rng)                       # simulated sensor: true q + noise
+            q_hat, qd_hat = obs.step(z, controller.last_a)      # observer: estimates q and qd from z
+            tcp_hat = tcp_from(q_hat)                           # where the controller believes the cup tip is
             if t + 1e-9 >= next_camera and stage in ('TRACK', 'VERIFY', 'APPROACH'):
                 next_camera += sample_dt
                 rgb, depth = cam.take_photo(d, noise_scale=1.0)
-                q_actual = d.qpos[:6].copy()
+                q_actual = q_hat.copy()
                 cam_pos, cam_R = cam.pose(q_actual)
                 result = cam.locate(rgb, depth, q_actual)
+                if not args.headless:
+                    vis = camera.debug_image(rgb, result[1] if result else None)
+                    cv2.imshow('wrist camera (green = fitted cube)', cv2.cvtColor(vis, cv2.COLOR_RGB2BGR))
+                    cv2.imshow('depth', (255 * (1 - np.clip(depth, 0, 1))).astype(np.uint8))
+                    cv2.waitKey(1)
                 if ekf.initialized and last_vision is not None:
                     ekf.predict(max(t - last_vision, 1e-6))
                 last_vision = t
@@ -234,7 +271,9 @@ def run_trial(seed, trajectory):
                                 # Evaluate Jacobian at the measured configuration.
                                 jp = np.zeros((3, m.nv))
                                 jr = np.zeros((3, m.nv))
-                                mujoco.mj_jacSite(m, d, jp, jr, tcp_id)
+                                mujoco.mj_comPos(m, est)          # est already holds q_hat from tcp_from()
+                                jp = np.zeros((3, m.nv)); jr = np.zeros((3, m.nv))
+                                mujoco.mj_jacSite(m, est, jp, jr, tcp_id)
                                 J = jp[:2, :6]
                                 raw = J.T @ np.linalg.solve(J@J.T+damping**2*np.eye(2), ekf.velocity)
                                 qd_ref = np.clip(raw, -vel_cap, vel_cap)
@@ -244,7 +283,7 @@ def run_trial(seed, trajectory):
                         else:
                             ik_fail += 1
                             qd_ref[:] = 0
-                        tcp_xy_err = float(np.linalg.norm(d.site_xpos[tcp_id, :2]-est_xy))
+                        tcp_xy_err = float(np.linalg.norm(tcp_hat[:2]-est_xy))
                         stationary = (ekf.speed < 0.003 and tcp_xy_err < 0.005)
                     else:
                         stationary = False
@@ -315,7 +354,7 @@ def run_trial(seed, trajectory):
                         mujoco.mju_mulQuat(m.eq_data[suction_id,6:10],inv,d.xquat[box_id])
                         d.eq_active[suction_id] = True
                         attached = True
-                        lift_target = d.site_xpos[tcp_id].copy()+[0,0,0.15]
+                        lift_target = tcp_hat.copy() + [0, 0, 0.15]
                         print(f'[seed={seed}] t={t:.2f}s CONTACT suction ON')
                         start_motion('LIFT',lift_target,1.5)
                         check_target = lift_target
@@ -343,7 +382,7 @@ def run_trial(seed, trajectory):
                         else:
                             stage = 'FAIL'
                             pick_error = f'Lift failed, rise={rise*1000:.1f}mm'
-            cmd = np.asarray(controller.compute(d.qpos[:6].copy(),d.qvel[:6].copy(),q_ref,qd_ref=qd_ref),float)
+            cmd = np.asarray(controller.compute(q_hat, qd_hat, q_ref, qd_ref=qd_ref), float)
             if cmd.shape!=(6,) or not np.all(np.isfinite(cmd)):
                 raise RuntimeError('Invalid joint command')
             d.ctrl[:6]=cmd
@@ -367,7 +406,8 @@ def run_trial(seed, trajectory):
     # The test should also confirm tracking was maintained until the final stop.
     return dict(seed=seed,trajectory=trajectory,final_stage=stage,success=int(stage=='SUCCESS'),
                 measurements=seen,accepted=accepted,lost=lost,ik_rejected=ik_fail,
-                clipping_frames=clip_frames,abort_count=aborts,
+                clipping_frames=clip_frames,abort_count=aborts, friction=round(fric,3), cube_mass=round(mass,3), light_scale=round(light,3),
+                start_x=round(float(centre[0]),4), start_y=round(float(centre[1]),4),
                 countdowns_started=countdown_started,resumes=tracking_resume,
                 pause_camera_frames=paused_frames_seen,contact_events=contact_count,
                 suction=int(attached),rise_mm=round(rise_mm,2),
@@ -379,7 +419,7 @@ def validated_ik(p, q_seed):
     q = np.asarray(ik(np.asarray(p, float), q_seed), float)
     if q.shape != (6,) or not np.all(np.isfinite(q)):
         return None
-    bounds = m.actuator_ctrlrange[:6]
+    bounds = m.jnt_range[:6]
     if np.any(q < bounds[:, 0]) or np.any(q > bounds[:, 1]):
         return None
     check.qpos[:6] = q
@@ -390,14 +430,14 @@ def validated_ik(p, q_seed):
 
 
 def start_motion(new_stage, p, duration):
-    global stage, stage_start, stage_duration, q_start, q_goal, qd_ref, pick_error
-    q = validated_ik(p, d.qpos[:6].copy())
+    global stage, stage_start, stage_duration, q_start, q_goal, qd_ref, pick_error, q_hat, qd_hat
+    q = validated_ik(p, q_hat)
     if q is None:
         pick_error = f'IK rejected {new_stage} target {np.asarray(p).round(4)}'
         stage = 'FAIL'
         print(pick_error)
         return
-    q_start = d.qpos[:6].copy()
+    q_start = q_hat.copy()
     q_goal = q
     stage_start = float(d.time)
     stage_duration = float(duration)
