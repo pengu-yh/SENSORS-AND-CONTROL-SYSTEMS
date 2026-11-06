@@ -34,3 +34,9 @@ python main.py --seeds [N] --headless        # batch of seeds, [CHECK in main.py
 ```
 Run from the repo folder. Python [3.9.5], MuJoCo [3.3.7]. Remove `--headless` to watch the viewer.
 
+
+## 3. Video of Disturbed vs Undisturbed trial with small explanation on sensing/modeling/estimation
+<iframe width="100%" height="480" src="https://www.youtube.com/embed/zLxY4an9fT4)" title="Demo video" frameborder="0" allowfullscreen></iframe>
+
+[Watch the demo video](https://youtu.be/zLxY4an9fT4)
+
