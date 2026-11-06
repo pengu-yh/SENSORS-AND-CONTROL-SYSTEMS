@@ -1,3 +1,5 @@
+**Repository:** [github.com/pengu-yh/SENSORS-AND-CONTROL-SYSTEMS](https://github.com/pengu-yh/SENSORS-AND-CONTROL-SYSTEMS)
+
 This project implements Track B (Manipulator: Vision-Guided Pick) using a UR3e robotic arm in MuJoCo with a wrist-mounted RGB-D camera.
 
 The system detects a red cube on a table, estimates its 3D position using image and depth information, and picks it up using Position-Based Visual Servoing (PBVS).
