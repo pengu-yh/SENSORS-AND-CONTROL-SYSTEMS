@@ -12,3 +12,7 @@ tracking_*.csv
 .DS_Store
 Thumbs.db
 .vscode/
+universal_robots_ur3e/
+ur3e_download/
+__pycache__/
+.venv/
