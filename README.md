@@ -1,3 +1,16 @@
+<!-- MathJax for the published GitHub Pages site. GitHub renders README math natively. -->
+<script>
+window.MathJax = {
+  tex: {
+    inlineMath: [['$', '$'], ['\\(', '\\)']],
+    displayMath: [['$$', '$$'], ['\\[', '\\]']],
+    processEscapes: true
+  },
+  options: { skipHtmlTags: ['script', 'noscript', 'style', 'textarea', 'pre', 'code'] }
+};
+</script>
+<script defer src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-chtml.js"></script>
+
 **Repository:** [github.com/pengu-yh/SENSORS-AND-CONTROL-SYSTEMS](https://github.com/pengu-yh/SENSORS-AND-CONTROL-SYSTEMS)
 
 ## Sensors and Control Integrated Project (TRACK B)
@@ -91,13 +104,13 @@ Between camera measurements, the cube is approximated by a constant-velocity mod
 
 $$
 \hat{\mathbf{x}}^-_k = F_k\hat{\mathbf{x}}_{k-1},\qquad
-F_k = \begin{bmatrix}1&0&\Delta t&0\\0&1&0&\Delta t\\0&0&1&0\\0&0&0&1\end{bmatrix}.
+F_k = \begin{bmatrix}1&0&\Delta t&0\cr 0&1&0&\Delta t\cr 0&0&1&0\cr 0&0&0&1\end{bmatrix}.
 $$
 
 Changes in velocity are represented by acceleration process noise:
 
 $$
-G_k=\begin{bmatrix}\Delta t^2/2&0\\0&\Delta t^2/2\\\Delta t&0\\0&\Delta t\end{bmatrix},\qquad
+G_k=\begin{bmatrix}\Delta t^2/2&0\cr 0&\Delta t^2/2\cr \Delta t&0\cr 0&\Delta t\end{bmatrix},\qquad
 Q_k=\sigma_a^2G_kG_k^T,\qquad
 P^-_k=F_kP_{k-1}F_k^T+Q_k.
 $$
@@ -117,7 +130,7 @@ The predicted pinhole-camera observation is:
 
 $$
 h(\mathbf{x}_k)=\begin{bmatrix}
-f_xX_c/Z_c+c_x\\f_yY_c/Z_c+c_y\\Z_c
+f_xX_c/Z_c+c_x\cr f_yY_c/Z_c+c_y\cr Z_c
 \end{bmatrix}.
 $$
 
