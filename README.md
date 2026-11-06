@@ -16,3 +16,21 @@ Part C:Do Nguyen Khoi Nguyen
 Part D: Alzaid Muhammed, Leon Markovic 
 Part E: All members
  
+| Item | Value |
+|---|---|
+| Robot / simulator | UR3e, MuJoCo, torque motors |
+| Visual servoing | PBVS, eye-in-hand wrist camera |
+| Joint estimator | 12-state Kalman filter, encoders on q only, commanded acceleration as input |
+| Cube estimator | 4-state EKF [x, y, vx, vy], pixel + depth measurement |
+| Controller | Computed torque (feedback linearisation) + per-joint discrete LQR |
+| Randomised per trial | cube start (±15 mm), friction, cube mass, lighting |
+
+## 2. Install and run
+```
+pip install -r requirements.txt
+python main.py --single-seed 42 --tag normal
+python main.py --single-seed 42 --torque-dist 0.2 --tag disturbed
+python main.py --seeds [N] --headless        # batch of seeds, [CHECK in main.py --help]
+```
+Run from the repo folder. Python [3.9.5], MuJoCo [3.3.7]. Remove `--headless` to watch the viewer.
+
