@@ -1,20 +1,15 @@
 **Repository:** [github.com/pengu-yh/SENSORS-AND-CONTROL-SYSTEMS](https://github.com/pengu-yh/SENSORS-AND-CONTROL-SYSTEMS)
 
-This project implements Track B (Manipulator: Vision-Guided Pick) using a UR3e robotic arm in MuJoCo with a wrist-mounted RGB-D camera.
+##Sensors and Control Integrated Project (TRACK B)
 
-The system detects a red cube on a table, estimates its 3D position using image and depth information, and picks it up using Position-Based Visual Servoing (PBVS).
-
-The cube position is estimated once from the camera image and depth data, transformed into the world coordinate frame, and converted into joint targets using damped least-squares inverse kinematics (DLS IK).
-
-To evaluate robustness, the cube position is randomised on every trial, the cube slides across the table before coming to rest, and sensor measurements contain noise. The system is designed to localise and pick up the cube despite these variations.
-
-Project Group Number: 34
+#Overview
+This project implements track B (manipulator: vision guided pick) using a ur3e robotic arm with a wrist mounted RGB-D camera in mujoco with pbvs. The camera detects a red 40mm cube tracks it while it moves around then executes a predictive pick using a combination of EKF, LQR Joint Controllers and arm Kinematics to do this. The cube is detected by its colour, its 3D position then calculated from the image and its depth, and the cameras pose from the forward kinematics of arm is then used to express the position in the base frame of the robot. An EKF is used to track the cube over time and predict (if its moving) where the cube will be, the filtered position is then converted to joint targets by damped least-squares inverse kinematics. Once the cube has been stationary for five frames the arm descends and executes the pick. A separate KF estimates joint angles and velocities from artificial noisy encoder readings, in conjunction with a LQR feedback controller that runs on estimated state. for Robustness each trial randomizes position, friction, mass, lighting and the cube slides across one of six paths before coming to reset and noise can also be added to each trial with simple changes in a the main.py command.
 
 
 Contribution
 Part A: Dija
-Part B:Alzaid Muhammed 
-Part C:Do Nguyen Khoi Nguyen 
+Part B: Alzaid Muhammed 
+Part C: Do Nguyen Khoi Nguyen 
 Part D: Alzaid Muhammed, Leon Markovic 
 Part E: All members
  
@@ -41,4 +36,7 @@ Run from the repo folder. Python [3.9.5], MuJoCo [3.3.7]. Remove `--headless` to
 <iframe width="100%" height="480" src="https://www.youtube.com/embed/zLxY4an9fT4" title="Demo video" frameborder="0" allowfullscreen></iframe>
 
 [Watch the demo video](https://youtu.be/zLxY4an9fT4)
+
+
+
 
