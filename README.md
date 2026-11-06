@@ -16,8 +16,7 @@ window.MathJax = {
 ## Sensors and Control Integrated Project (TRACK B)
 
 # Overview
-This project implements track B (manipulator: vision guided pick) using a ur3e robotic arm with a wrist mounted RGB-D camera in mujoco with pbvs. The camera detects a red 40mm cube tracks it while it moves around then executes a predictive pick using a combination of EKF, LQR Joint Controllers and arm Kinematics to do this. The cube is detected by its colour, its 3D position then calculated from the image and its depth, and the cameras pose from the forward kinematics of arm is then used to express the position in the base frame of the robot. An EKF is used to track the cube over time and predict (if its moving) where the cube will be, the filtered position is then converted to joint targets by damped least-squares inverse kinematics. Once the cube has been stationary for five frames the arm descends and executes the pick. A separate KF estimates joint angles and velocities from artificial noisy encoder readings, in conjunction with a LQR feedback controller that runs on estimated state. for Robustness each trial randomizes position, friction, mass, lighting and the cube slides across one of six paths before coming to reset and noise can also be added to each trial with simple changes in a the main.py command.
-
+This project implements Track B (manipulator: vision-guided pick) using a UR3e robotic arm with a wrist-mounted RGB-D camera in MuJoCo with PBVS. The camera detects a red 40 mm cube and tracks it while it moves around, then executes a predictive pick using a combination of an EKF, LQR joint controllers and arm kinematics. The cube is detected by its colour, its 3D position is then calculated from the image and its depth, and the camera’s pose from the arm’s forward kinematics is used to express the position in the robot’s base frame. An EKF tracks the cube over time and predicts where it will be if it is moving. The filtered position is then converted to joint targets by damped least-squares inverse kinematics. Once the cube has been stationary for five frames, the arm descends and executes the pick. A separate KF estimates joint angles and velocities from artificially noisy encoder readings, in conjunction with an LQR feedback controller that runs on the estimated state. For robustness, each trial randomises position, friction, mass and lighting, and the cube slides across one of six paths before coming to rest. Noise can also be added to each trial with simple changes to the main.py command.
 
 Contribution
 Part A: Dija
@@ -70,7 +69,7 @@ A = [ 0   I ]    B = [ 0     ]    C = [ I  0 ]
 `K̃ = −M⁻¹ ∂g/∂q` is the effect of gravity on small deviations. The velocity is not measured, so it has to be estimated by the observer (section 6).
 
 **Analysis** (`src/control/model_analysis.py`):
-when ran output:
+when run, the output is:
 ```
 Linearised UR3e: states 12, inputs 6, outputs 6
 controllability rank: 12 / 12
