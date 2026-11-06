@@ -160,7 +160,7 @@ def run_trial(seed, trajectory):
     global initial_height, rows, seen, accepted, lost, ik_fail, clip_frames
     global max_joint_error, max_ff, check_target, aborts, countdown_started
     global false_pick, stable_time, tracking_resume, paused_frames_seen
-    global q_hat, qd_hat
+    global q_hat, qd_hat, approach_motion_frames
     rng = np.random.default_rng(seed)
     fric = rng.uniform(0.5, 1.2)                      # cube friction coefficient
     mass = rng.uniform(0.02, 0.08)                    # cube mass [kg]
@@ -210,6 +210,7 @@ def run_trial(seed, trajectory):
     q_goal = q_scan.copy()
     locked_xy = None
     stationary_frames = 0
+    approach_motion_frames = 0  # consecutive RGB-D frames indicating resumed motion
     attached = False
     contact_count = 0
     pick_error = None
@@ -336,14 +337,24 @@ def run_trial(seed, trajectory):
                         start_motion('APPROACH', [*locked_xy, 0.12], 1.5)
                         check_target = np.array([*locked_xy, 0.12])
                 elif stage == 'APPROACH':
-                    # Cancel approach on resumed cube movement, before descent begins.
-                    if (not fresh or ekf.speed >= 0.004 or
-                        np.linalg.norm(ekf.position[:2]-locked_xy) >= 0.005):
-                        print(f'[seed={seed}] t={t:.2f}s APPROACH ABORT -> TRACK')
+                    # Debounce velocity spikes caused by moving-camera RGB-D noise.
+                    # Count CAMERA updates (0.1 s), not physics timesteps (0.002 s).
+                    # Missing/stale sensing and substantial XY displacement still abort immediately.
+                    displacement = float(np.linalg.norm(ekf.position[:2] - locked_xy))
+                    if measurement_ok and fresh and ekf.speed >= 0.004:
+                        approach_motion_frames += 1
+                    else:
+                        approach_motion_frames = 0
+                    if (not fresh or displacement >= 0.005 or
+                            approach_motion_frames >= 3):
+                        print(f'[seed={seed}] t={t:.2f}s APPROACH ABORT -> TRACK '
+                              f'(speed={ekf.speed:.4f}m/s, displacement={displacement:.4f}m, '
+                              f'motion_frames={approach_motion_frames}/3)')
                         aborts += 1
                         tracking_resume += 1
                         stage = 'TRACK'
                         stationary_frames = 0
+                        approach_motion_frames = 0
                         locked_xy = None
                         qd_ref[:] = 0
                 if int(round(t*10)) % 10 == 0:
@@ -377,7 +388,9 @@ def run_trial(seed, trajectory):
                 if t >= stage_start+stage_duration+0.35:
                     if stage == 'APPROACH':
                         # One last camera validation was done in the latest frame above.
-                        if last_detection is None or t-last_detection > 0.15 or ekf.speed >= 0.004:
+                        if (last_detection is None or t-last_detection > 0.15 or
+                                approach_motion_frames >= 3 or
+                                np.linalg.norm(ekf.position[:2] - locked_xy) >= 0.005):
                             print(f'[seed={seed}] t={t:.2f}s PRE-DESCENT ABORT -> TRACK')
                             aborts += 1
                             tracking_resume += 1
@@ -462,6 +475,7 @@ def validated_ik(p, q_seed):
 
 def start_motion(new_stage, p, duration):
     global stage, stage_start, stage_duration, q_start, q_goal, qd_ref, pick_error, q_hat, qd_hat
+    global approach_motion_frames
     q = validated_ik(p, q_hat)
     if q is None:
         pick_error = f'IK rejected {new_stage} target {np.asarray(p).round(4)}'
@@ -470,6 +484,8 @@ def start_motion(new_stage, p, duration):
         return
     q_start = q_hat.copy()
     q_goal = q
+    if new_stage == 'APPROACH':
+        approach_motion_frames = 0
     stage_start = float(d.time)
     stage_duration = float(duration)
     qd_ref[:] = 0
