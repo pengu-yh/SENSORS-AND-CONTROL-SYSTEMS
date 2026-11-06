@@ -37,6 +37,26 @@ Run from the repo folder. Python [3.9.5], MuJoCo [3.3.7]. Remove `--headless` to
 
 [Watch the demo video](https://youtu.be/zLxY4an9fT4)
 
+## 4. Model
+
+**Plant.** The UR3e is modelled as six rigid links driven by joint torques:
+
+```
+M(q) q̈ + h(q, q̇) = τ
+```
+
+`M(q)` is the mass matrix, `h` holds gravity, Coriolis and centrifugal terms, and `τ` is the vector of six joint torques. We linearise around the scan (cup tip at [0.27, 0.10, 0.30] m, tool down), where the camera first scans the cube, with the nominal torque holding the arm still.
+
+
+```
+ẋ = A x + B u,   y = C x
+A = [ 0   I ]    B = [ 0     ]    C = [ I  0 ]
+    [ K̃   0 ]        [ M⁻¹ ]
+```
+
+`K̃ = −M⁻¹ ∂g/∂q` is the effect of gravity on small deviations. The velocity is not measured, so it has to be estimated by the observer (section 5).
+
+
 
 
 
