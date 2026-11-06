@@ -347,6 +347,7 @@ def run_trial(seed, trajectory):
                         locked_xy = None
                         qd_ref[:] = 0
                 if int(round(t*10)) % 10 == 0:
+                     # EVALUATION ONLY: true tip position is used for this printout, not for control
                     err = np.linalg.norm(d.site_xpos[tcp_id,:2]-ekf.position[:2])*1000 if ekf.initialized else np.nan
                     print(f'[seed={seed}] t={t:4.1f}s {stage} camera={"OK" if result is not None else "LOST"} '
                           f'speed={ekf.speed if ekf.initialized else np.nan:.4f} TCPerr={err:.1f}mm stable={stationary_frames}/5')
@@ -356,6 +357,7 @@ def run_trial(seed, trajectory):
                 q_ref = q_start+smooth*(q_goal-q_start)
                 qd_ref[:] = 0
                 if stage == 'DESCEND' and not attached:
+                    # SIMULATED TOUCH SENSOR + simulator physics: reads MuJoCo contacts; the weld is set from the true relative pose
                     contact = any(((c.geom1==cup_id and c.geom2==box_geom_id) or
                                    (c.geom1==box_geom_id and c.geom2==cup_id)) and c.dist <= 0.001
                                   for c in d.contact)
@@ -401,10 +403,11 @@ def run_trial(seed, trajectory):
                 raise RuntimeError('Invalid joint command')
             d.ctrl[:6] = cmd + args.torque_bias + dist_rng.normal(0, args.torque_dist, 6)
             tau_peak = max(tau_peak, float(np.max(np.abs(cmd) / controller.limit)))
-            err_log.append(np.r_[q_hat - d.qpos[:6], qd_hat - d.qvel[:6]])
+            err_log.append(np.r_[q_hat - d.qpos[:6], qd_hat - d.qvel[:6]])  # EVALUATION ONLY: truth vs estimate
             sig_log.append(obs.sigma.copy())
             max_joint_error = max(max_joint_error,float(np.max(np.abs(q_ref-d.qpos[:6]))))
             if int(round(t/m.opt.timestep))%10 == 0:
+                 # EVALUATION ONLY: logs true cube/tip/joint state beside the estimates
                 rows.append([seed,t,stage,int(short_pause),stationary_frames,aborts,
                              *d.xpos[box_id,:3],*d.site_xpos[tcp_id],
                              *(ekf.position[:2] if ekf.initialized else [np.nan,np.nan]),
@@ -421,7 +424,7 @@ def run_trial(seed, trajectory):
         cam.ren.close()
         if viewer is not None:
             viewer.close()
-    rise_mm = 1000*(d.xpos[box_id,2]-initial_height)
+    rise_mm = 1000*(d.xpos[box_id,2]-initial_height)     # EVALUATION ONLY: success is judged from the true cube height
     E, S = np.array(err_log), np.array(sig_log)
     stats = dict(q_rmse_mrad=round(1e3*float(np.sqrt(np.mean(E[:, :6]**2))), 3),
                  qd_rmse=round(float(np.sqrt(np.mean(E[:, 6:]**2))), 4),
@@ -472,11 +475,6 @@ def start_motion(new_stage, p, duration):
     qd_ref[:] = 0
     stage = new_stage
     print(f't={d.time:.2f}s -> {stage}, target TCP {np.asarray(p).round(4)}')
-
-
-def at_goal(tol_xyz=0.006, tol_q=0.05):
-    return (np.linalg.norm(d.site_xpos[tcp_id] - check_target) < tol_xyz
-            and np.max(np.abs(d.qpos[:6] - q_goal)) < tol_q)
 
 
 if __name__ == '__main__':

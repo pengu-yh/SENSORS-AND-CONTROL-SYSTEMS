@@ -1,23 +1,5 @@
-mujoco==3.16.0
+mujoco
 numpy
+scipy
 opencv-python
 matplotlib
-scipy
-
-#run in order, check python ver for something i dont remember
- py -m venv .venv
- .\.venv\Scripts\Activate.ps1
- python -m pip install --upgrade pip
- python -m pip install --upgrade pip setuptools wheel
- python -m pip install --only-binary=:all: mujoco
- python -m pip install numpy scipy 
- python -m pip install opencv-python
- python -m pip install matplotlib
- python -m pip install cv2
-
-
-# to run the simulation, run main.py witth the following command in the terminal
-# also make sure the path is set to the repo's folder
-python main.py --seeds x --headless
-# x can be any number of sims and headless is optional, if you want to see the simulation then dont add it, if you want to run it faster then add it
-
