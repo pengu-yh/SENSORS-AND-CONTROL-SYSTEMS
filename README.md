@@ -54,7 +54,7 @@ A = [ 0   I ]    B = [ 0     ]    C = [ I  0 ]
     [ K̃   0 ]        [ M⁻¹ ]
 ```
 
-`K̃ = −M⁻¹ ∂g/∂q` is the effect of gravity on small deviations. The velocity is not measured, so it has to be estimated by the observer (section 5).
+`K̃ = −M⁻¹ ∂g/∂q` is the effect of gravity on small deviations. The velocity is not measured, so it has to be estimated by the observer (section 6).
 
 
 
