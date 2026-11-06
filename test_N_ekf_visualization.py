@@ -1,6 +1,8 @@
 """Test N: cinematic plots for moving cube, V4 RGB-D sensing, and CubeEKF.
 Run from repository root: .\\.venv\\Scripts\\python.exe test_N_ekf_visualization.py
 Cube truth is used ONLY to drive motion and evaluate errors.
+The arm is held at its scan pose kinematically: this is an isolated
+perception/EKF test, NOT a torque-controller or full-system test.
 """
 import csv
 from pathlib import Path
@@ -26,7 +28,11 @@ def main():
     if q_scan.shape != (6,) or not np.all(np.isfinite(q_scan)):
         raise RuntimeError('Scan IK returned invalid joint angles')
     d.qpos[:6] = q_scan
-    d.ctrl[:6] = q_scan
+    # Test N isolates camera sensing and cube EKF from the arm controller.
+    # The six UR3e actuators are TORQUE motors, not position servos.
+    # Hold the scan pose kinematically during this estimator-only test.
+    d.qvel[:6] = 0.0
+    d.ctrl[:6] = 0.0
     mujoco.mj_forward(m,d)
     cam = camera(m, W=640, H=480, seed=42)
     ekf = CubeEKF(dt=PERIOD, K=cam.K, top_z=.04)
@@ -42,8 +48,13 @@ def main():
             else:
                 vx,vy=0.,0.
             d.qvel[vadr:vadr+2]=[vx,vy]
-            d.ctrl[:6]=q_scan
+            # No angle-as-torque command. Re-impose a fixed scan pose after
+            # each physics step and recompute camera/body transforms.
+            d.ctrl[:6] = 0.0
             mujoco.mj_step(m,d)
+            d.qpos[:6] = q_scan
+            d.qvel[:6] = 0.0
+            mujoco.mj_forward(m,d)
             if d.time + 1e-9 < next_camera:
                 continue
             now=float(d.time)
@@ -71,7 +82,10 @@ def main():
             speed=ekf.speed if ekf.initialized else np.nan
             raw_err=float(np.linalg.norm(measured-gt)*1000) if np.all(np.isfinite(measured)) else np.nan
             ekf_err=float(np.linalg.norm(est-gt)*1000) if np.all(np.isfinite(est)) else np.nan
-            rows.append(dict(t=now,true_x=gt[0],true_y=gt[1],raw_x=measured[0],raw_y=measured[1],
+            # Posterior covariance: 1-sigma world X/Y position uncertainty (metres).
+            sigma_x = float(np.sqrt(max(0.0, ekf.P[0, 0]))) if ekf.initialized else np.nan
+            sigma_y = float(np.sqrt(max(0.0, ekf.P[1, 1]))) if ekf.initialized else np.nan
+            rows.append(dict(sigma_x=sigma_x,sigma_y=sigma_y,t=now,true_x=gt[0],true_y=gt[1],raw_x=measured[0],raw_y=measured[1],
                              ekf_x=est[0],ekf_y=est[1],raw_err_mm=raw_err,ekf_err_mm=ekf_err,
                              ekf_speed=speed,ekf_vx=(float(ekf.velocity[0]) if ekf.initialized else np.nan),ekf_vy=(float(ekf.velocity[1]) if ekf.initialized else np.nan),detected=int(result is not None),accepted=int(accepted),
                              fit_score_px2=score))
@@ -149,7 +163,25 @@ def main():
                 label='0.15 s lookahead target',lw=2,ls='--')
         ax.axvline(MOVE_DURATION,ls=':',color='gray',label='Cube stops')
         ax.set_xlabel('Time (s)');ax.legend();save(fig,'06_predictive_target_explained.png')
-        print('Saved results.csv + 6 cinematic 16:9 plots to:',OUT)
+        # Figure 7: signed world-frame position errors against posterior ±3 sigma.
+        # This is a marginal (per-axis) uncertainty check, not a 2D radial bound.
+        fig, axes = plt.subplots(2, 1, figsize=(12.8, 7.2), dpi=150, sharex=True)
+        for ax, axis in zip(axes, ('x', 'y')):
+            signed_error = (values('ekf_' + axis) - values('true_' + axis)) * 1000
+            bound = 3.0 * values('sigma_' + axis) * 1000
+            ax.plot(t, signed_error, label=f'{axis.upper()} signed estimation error', lw=2.0)
+            ax.plot(t, bound, '--', label='+3σ bound', lw=1.5)
+            ax.plot(t, -bound, '--', label='−3σ bound', lw=1.5)
+            ax.fill_between(t, -bound, bound, alpha=0.12, label='±3σ interval')
+            ax.axhline(0, color='gray', alpha=0.5, lw=0.8)
+            ax.axvline(MOVE_DURATION, ls=':', color='gray', label='Cube stops')
+            ax.set_ylabel(f'{axis.upper()} error (mm)')
+            ax.grid(alpha=0.18)
+            ax.legend(loc='best', fontsize=9, ncol=3)
+        axes[-1].set_xlabel('Time (s)')
+        fig.suptitle('EKF signed position error and posterior ±3σ bounds', fontsize=18, weight='bold')
+        save(fig, '07_EKF_uncertainty_3sigma.png')
+        print('Saved results.csv + 7 cinematic 16:9 plots to:',OUT)
     except ImportError:
         print('Saved CSV to:',OUT,'(pip install matplotlib for plots)')
 
