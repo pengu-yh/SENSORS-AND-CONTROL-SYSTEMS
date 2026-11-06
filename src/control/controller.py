@@ -20,7 +20,7 @@ class JointController:
         P = solve_discrete_are(self.Ad, self.Bd, Q, R)        # minimum cost-to-go matrix
         self.K = np.linalg.solve(R + self.Bd.T @ P @ self.Bd, self.Bd.T @ P @ self.Ad)   # shape (1, 2)
         self.limit = m.actuator_ctrlrange[:6, 1].copy()       # torque limits [Nm]
-        self.last_a = np.zeros(6)                             # <- add this line in __init__
+        self.last_a = np.zeros(6)                            
 
     def _mass_matrix(self):
         try:
@@ -37,7 +37,7 @@ class JointController:
 
         # 1. LQR: desired joint acceleration from the estimated errors
         a = -(self.K[0, 0] * (q_hat - q_ref) + self.K[0, 1] * (qd_hat - qd_ref))
-        self.last_a = a                                       # <- add this line
+        self.last_a = a                                       
 
         # 2. model at the estimated state: mass matrix M and gravity+Coriolis bias h
         self.scratch.qpos[:6] = q_hat
