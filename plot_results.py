@@ -1,10 +1,12 @@
+import sys
+from pathlib import Path
 import numpy as np
 import matplotlib.pyplot as plt
 
-# CSV: time,q_ref1,...,q_ref6,q_actual1,...,q_actual6
-# Use one trial, regular time steps, seconds and radians.
-# q_ref = desired trajectory; actual positions are for evaluation only.
-FILE = "tracking_results.csv"
+# CSV: time,q_ref1,...,q_ref6,q_actual1,...,q_actual6 (plus other logged columns, which are ignored)
+# Use one trial. q_ref = desired trajectory; q_actual is ground truth, used for evaluation only.
+ROOT = Path(__file__).resolve().parents[2]            # this file sits in src/control/
+FILE = Path(sys.argv[1]) if len(sys.argv) > 1 else ROOT / "results" / "tracking_circle_seed42_nominal.csv"
 data = np.genfromtxt(FILE, delimiter=",", names=True, ndmin=1)
 
 time = data["time"]
@@ -25,13 +27,14 @@ rmse = np.sqrt(np.mean(error**2, axis=0))
 max_error = np.max(np.abs(error), axis=0)
 final_error = np.abs(error[-1])
 
+print(f"File: {FILE.name}")
 print("Joint | RMSE | Max error | Final error (all in degrees)")
 for i in range(6):
     print(i + 1, round(rmse[i], 3), round(max_error[i], 3), round(final_error[i], 3))
 
 # Save the error measurements for all six joints.
 results = np.column_stack((np.arange(1, 7), rmse, max_error, final_error))
-np.savetxt("tracking_results_summary.csv", results, delimiter=",", fmt="%.6f",
+np.savetxt(ROOT / "results" / "tracking_results_summary.csv", results, delimiter=",", fmt="%.6f",
            header="joint,rmse_deg,max_error_deg,final_error_deg", comments="")
 
 # Compare the desired and actual movement of each joint.
@@ -47,5 +50,5 @@ for i in range(6):
     plt.legend()
 
 plt.tight_layout()
-plt.savefig("tracking_results_tracking.png", dpi=150)
+plt.savefig(ROOT / "results" / "tracking_results_tracking.png", dpi=150)
 plt.show()
