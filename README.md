@@ -5,6 +5,7 @@ The system detects a red cube on a table, estimates its 3D position using image 
 The cube position is estimated once from the camera image and depth data, transformed into the world coordinate frame, and converted into joint targets using damped least-squares inverse kinematics (DLS IK).
 
 To evaluate robustness, the cube position is randomised on every trial, the cube slides across the table before coming to rest, and sensor measurements contain noise. The system is designed to localise and pick up the cube despite these variations.
+
 Contribution
 Part A: Dija
 Part B:Alzaid Muhammed 
