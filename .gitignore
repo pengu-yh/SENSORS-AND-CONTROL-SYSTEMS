@@ -16,3 +16,5 @@ universal_robots_ur3e/
 ur3e_download/
 __pycache__/
 .venv/
+__pycache__/
+.venv/
