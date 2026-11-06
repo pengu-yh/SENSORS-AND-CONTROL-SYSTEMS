@@ -36,7 +36,7 @@ ap.add_argument('--enc-noise', type=float, default=1.0, help='x nominal encoder 
 ap.add_argument('--depth-noise', type=float, default=1.0, help='x nominal depth/rgb noise')
 ap.add_argument('--torque-dist', type=float, default=0.0, help='white torque noise [Nm] per joint')
 ap.add_argument('--torque-bias', type=float, default=0.0, help='constant torque disturbance [Nm] per joint')
-ap.add_argument('--mass-mismatch', type=float, default=1.0, help="controller model mass scale (1.2 = +20%)")
+ap.add_argument('--mass-mismatch', type=float, default=1.0, help="controller model mass scale (1.2 = +20%%)")
 ap.add_argument('--ekf-accel', type=float, default=0.30, help='cube EKF process noise [m/s^2]')
 ap.add_argument('--obs-accel', type=float, default=1.0, help='joint observer process noise [rad/s^2]')
 ap.add_argument('--q-w', type=float, default=2500.0, help='LQR position weight')
