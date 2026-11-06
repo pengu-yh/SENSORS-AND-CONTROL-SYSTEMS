@@ -32,6 +32,16 @@ ap.add_argument('--stop-time', type=float, default=6.0)
 ap.add_argument('--paths', type=str, default='circle,horizontal,vertical,diagonal,square,zigzag', help='Comma-separated trajectory types')
 ap.add_argument('--margin', type=float, default=0.005, help='Margin inside tested XY workspace')
 ap.add_argument('--amplitude', type=float, default=1.0, help='Scale of all trajectories, <=1 recommended')
+ap.add_argument('--enc-noise', type=float, default=1.0, help='x nominal encoder noise (simulator side)')
+ap.add_argument('--depth-noise', type=float, default=1.0, help='x nominal depth/rgb noise')
+ap.add_argument('--torque-dist', type=float, default=0.0, help='white torque noise [Nm] per joint')
+ap.add_argument('--torque-bias', type=float, default=0.0, help='constant torque disturbance [Nm] per joint')
+ap.add_argument('--mass-mismatch', type=float, default=1.0, help="controller model mass scale (1.2 = +20%)")
+ap.add_argument('--ekf-accel', type=float, default=0.30, help='cube EKF process noise [m/s^2]')
+ap.add_argument('--obs-accel', type=float, default=1.0, help='joint observer process noise [rad/s^2]')
+ap.add_argument('--q-w', type=float, default=2500.0, help='LQR position weight')
+ap.add_argument('--tag', type=str, default='nominal', help='label for output files')
+ap.add_argument('--obs-enc-scale', type=float, default=1.0, help="observer's assumed encoder sigma, x nominal")   # <- new
 args = ap.parse_args()
 
 m = mujoco.MjModel.from_xml_path(str(ROOT / 'robot_model' / 'pick_scene.xml'))
@@ -62,8 +72,8 @@ XY_MAX = np.array([0.34, 0.16])
 def read_encoders(d, rng):
     """SIMULATED SENSOR: the simulator's true joint angles corrupted by encoder noise.
     This is the only place true joint state enters the control pipeline."""
-    return d.qpos[:6] + rng.normal(0, ENC_STD, 6)
-
+    return d.qpos[:6] + rng.normal(0, ENC_STD * args.enc_noise, 6)
+    
 def tcp_from(q):
     """Cup-tip position from joint angles q (forward kinematics on the private model)."""
     est.qpos[:6] = q
@@ -159,9 +169,6 @@ def run_trial(seed, trajectory):
     m.body_mass[box_id] = mass
     m.body_inertia[box_id] = BOX_INERTIA0 * mass / BOX_MASS0    # keep inertia consistent with mass
     m.light_diffuse[:] = LIGHT0 * light
-    m.geom_friction[box_geom_id, 0] = rng.uniform(0.5, 1.2)      # cube friction
-    m.body_mass[box_id] = rng.uniform(0.02, 0.08)                # cube mass [kg]
-    m.light_ambient[:] = rng.uniform(0.2, 0.4)                   # lighting
     pause_duration = args.pause_frames*sample_dt
     d = mujoco.MjData(m)
     mujoco.mj_resetDataKeyframe(m, d, 0)
@@ -175,15 +182,22 @@ def run_trial(seed, trajectory):
     ok, reason = reachable_preflight(trajectory, centre, q_scan, pause_duration)
     if not ok:
         return dict(seed=seed, trajectory=trajectory, final_stage='PREFLIGHT_REJECT',
-                    success=0, failure_reason=reason, rows=[])
+                    success=0, failure_reason=reason, rows=[],
+                    friction=round(fric,3), cube_mass=round(mass,3), light_scale=round(light,3),
+                    start_x=round(float(centre[0]),4), start_y=round(float(centre[1]),4))
     d.qpos[:6] = q_scan
     d.eq_active[suction_id] = False
     mujoco.mj_forward(m, d)
     cam = camera(m, seed=seed)
-    ekf = CubeEKF(dt=sample_dt, K=cam.K, top_z=cam.top_z)
-    controller = make_controller(m, q0=q_scan) 
+    ekf = CubeEKF(dt=sample_dt, K=cam.K, top_z=cam.top_z, accel_std=args.ekf_accel)
+    mc = mujoco.MjModel.from_xml_path(str(ROOT / 'robot_model' / 'pick_scene.xml'))
+    mc.body_mass[:] *= args.mass_mismatch
+    mc.body_inertia[:] *= args.mass_mismatch
+    controller = make_controller(mc, q0=q_scan, q_w=args.q_w)
     enc_rng = np.random.default_rng(seed + 1000)
-    obs = JointObserver(m.opt.timestep, ENC_STD, accel_std=1.0)                    
+    obs = JointObserver(m.opt.timestep, ENC_STD * args.obs_enc_scale, accel_std=args.obs_accel)   # <- changed
+    dist_rng = np.random.default_rng(seed + 2000)
+    err_log, sig_log, tau_peak = [], [], 0.0
     q_ref = q_scan.copy()
     qd_ref = np.zeros(6)
     last_detection = None
@@ -232,7 +246,7 @@ def run_trial(seed, trajectory):
             tcp_hat = tcp_from(q_hat)                           # where the controller believes the cup tip is
             if t + 1e-9 >= next_camera and stage in ('TRACK', 'VERIFY', 'APPROACH'):
                 next_camera += sample_dt
-                rgb, depth = cam.take_photo(d, noise_scale=1.0)
+                rgb, depth = cam.take_photo(d, noise_scale=args.depth_noise)
                 q_actual = q_hat.copy()
                 cam_pos, cam_R = cam.pose(q_actual)
                 result = cam.locate(rgb, depth, q_actual)
@@ -385,14 +399,20 @@ def run_trial(seed, trajectory):
             cmd = np.asarray(controller.compute(q_hat, qd_hat, q_ref, qd_ref=qd_ref), float)
             if cmd.shape!=(6,) or not np.all(np.isfinite(cmd)):
                 raise RuntimeError('Invalid joint command')
-            d.ctrl[:6]=cmd
+            d.ctrl[:6] = cmd + args.torque_bias + dist_rng.normal(0, args.torque_dist, 6)
+            tau_peak = max(tau_peak, float(np.max(np.abs(cmd) / controller.limit)))
+            err_log.append(np.r_[q_hat - d.qpos[:6], qd_hat - d.qvel[:6]])
+            sig_log.append(obs.sigma.copy())
             max_joint_error = max(max_joint_error,float(np.max(np.abs(q_ref-d.qpos[:6]))))
-            if int(round(t/m.opt.timestep))%50 == 0:
+            if int(round(t/m.opt.timestep))%10 == 0:
                 rows.append([seed,t,stage,int(short_pause),stationary_frames,aborts,
                              *d.xpos[box_id,:3],*d.site_xpos[tcp_id],
                              *(ekf.position[:2] if ekf.initialized else [np.nan,np.nan]),
                              ekf.speed if ekf.initialized else np.nan,int(attached),
-                             *q_ref,*d.qpos[:6]])
+                             *q_ref,*d.qpos[:6],
+                             *d.qvel[:6], *qd_hat, *obs.sigma[6:12], *q_hat, *obs.sigma[:6], *cmd,
+                             *(ekf.velocity if ekf.initialized else [np.nan, np.nan]),
+                             *d.qvel[box_dof:box_dof+2]])
             mujoco.mj_step(m,d)
             if viewer is not None:
                 viewer.sync()
@@ -402,9 +422,17 @@ def run_trial(seed, trajectory):
         if viewer is not None:
             viewer.close()
     rise_mm = 1000*(d.xpos[box_id,2]-initial_height)
+    E, S = np.array(err_log), np.array(sig_log)
+    stats = dict(q_rmse_mrad=round(1e3*float(np.sqrt(np.mean(E[:, :6]**2))), 3),
+                 qd_rmse=round(float(np.sqrt(np.mean(E[:, 6:]**2))), 4),
+                 within_3sigma=round(float(np.mean(np.abs(E) < 3*S[:, :12])), 4),
+                 tau_peak=round(tau_peak, 3))
     # A false pick is any suction/contact during the scripted temporary pause.
     # The test should also confirm tracking was maintained until the final stop.
     return dict(seed=seed,trajectory=trajectory,final_stage=stage,success=int(stage=='SUCCESS'),
+                **stats, tag=args.tag, enc_noise=args.enc_noise, depth_noise=args.depth_noise,
+                torque_dist=args.torque_dist, torque_bias=args.torque_bias,
+                mass_mismatch=args.mass_mismatch,
                 measurements=seen,accepted=accepted,lost=lost,ik_rejected=ik_fail,
                 clipping_frames=clip_frames,abort_count=aborts, friction=round(fric,3), cube_mass=round(mass,3), light_scale=round(light,3),
                 start_x=round(float(centre[0]),4), start_y=round(float(centre[1]),4),
@@ -469,16 +497,20 @@ if __name__ == '__main__':
             print('TRIAL EXCEPTION:',repr(e))
         rows = result.pop('rows')
         if rows:
-            with (output_dir/f'tracking_{trajectory}_seed{seed}.csv').open('w',newline='') as f:
+            with (output_dir/f'tracking_{trajectory}_seed{seed}_{args.tag}.csv').open('w',newline='') as f:
                 w=csv.writer(f)
                 w.writerow(['seed','time','stage','scripted_pause','stationary_frames','abort_count',
                             'cube_x','cube_y','cube_z','tcp_x','tcp_y','tcp_z',
                             'ekf_x','ekf_y','ekf_speed','attached']+
-                           [f'q_ref{i}' for i in range(1,7)]+[f'q_actual{i}' for i in range(1,7)])
+                           [f'q_ref{i}' for i in range(1,7)]+[f'q_actual{i}' for i in range(1,7)]+
+                           [f'qd_true{i}' for i in range(1,7)]+[f'qd_hat{i}' for i in range(1,7)]+
+                           [f'qd_sig{i}' for i in range(1,7)]+[f'q_hat{i}' for i in range(1,7)]+
+                           [f'q_sig{i}' for i in range(1,7)]+[f'cmd{i}' for i in range(1,7)]+
+                           ['ekf_vx','ekf_vy','cube_vx','cube_vy'])
                 w.writerows(rows)
         results.append(result)
         print('TRIAL RESULT:',{k:v for k,v in result.items() if k not in ('rows',)})
-    with (output_dir/'run_summary.csv').open('w',newline='') as f:
+    with (output_dir/f'run_summary_{args.tag}.csv').open('w',newline='') as f:
         keys=list(dict.fromkeys(k for r in results for k in r))
         w=csv.DictWriter(f,fieldnames=keys)
         w.writeheader()
@@ -491,6 +523,6 @@ if __name__ == '__main__':
     print('Scripted pause camera frames:',sum(r.get('pause_camera_frames',0) for r in results))
     print('All seeds:',[(r['seed'],r.get('trajectory'),r['final_stage'],r.get('abort_count',0)) for r in results])
     print('By path:', {p: (sum(r['success'] for r in results if r.get('trajectory')==p), sum(r.get('trajectory')==p for r in results)) for p in paths})
-    print('CSV:',output_dir/'run_summary.csv')
+    print('CSV:',output_dir/f'run_summary_{args.tag}.csv')
     print('NOTE: workspace preflight is sampled IK+FOV, not continuous collision checking.')
     print('NOTE: simulation-only, no physical robot safety validation.')

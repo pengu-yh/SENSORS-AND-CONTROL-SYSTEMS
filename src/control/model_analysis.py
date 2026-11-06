@@ -1,12 +1,17 @@
 import mujoco, numpy as np
 from pathlib import Path
+import sys 
 
-XML = Path(__file__).resolve().parents[2] / "universal_robots_ur3e" / "ur3e.xml"
+ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT))
+from src.control.ik import make_ik
+
+XML = Path(__file__).resolve().parents[2] / "robot_model" / "pick_scene.xml"
 m = mujoco.MjModel.from_xml_path(str(XML))
 d = mujoco.MjData(m)
-mujoco.mj_resetDataKeyframe(m, d, 0)
+mujoco.mj_resetDataKeyframe(m, d, 0)      
 n = 6
-q0 = d.qpos[:n].copy()                      # linearisation point = home pose, at rest
+q0 = make_ik(m)(np.array([0.27, 0.10, 0.30]), d.qpos[:n])   # scan pose, where the arm spends the run           
 
 def mass(q):
     d.qpos[:n] = q; mujoco.mj_forward(m, d)
