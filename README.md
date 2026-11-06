@@ -50,7 +50,7 @@ Run from the repo folder. Python [3.9.5], MuJoCo [3.3.7]. Remove `--headless` to
 
 [Watch the demo video](https://youtu.be/zLxY4an9fT4)
 
-## 4. Model
+## 4. Model (Part A)
 
 **Plant.** The UR3e is modelled as six rigid links driven by joint torques:
 
