@@ -119,7 +119,7 @@ The implementation uses an acceleration-noise standard deviation of **0.30 m/s²
 
 ### 6.3 Nonlinear RGB-D Observation
 
-Each valid detection supplies the measurement **$\mathbf{z}_k=[u,v,Z]^T$**, where $u,v$ are image coordinates and $Z$ is camera-frame depth. The camera position \(\mathbf{t}_{wc}\) and optical-to-world rotation \(R_{wc}\) are obtained from the robot kinematic model.
+Each valid detection supplies the measurement **$\mathbf{z}_k=[u,v,Z]^T$**, where $u,v$ are image coordinates and $Z$ is camera-frame depth. The camera position $\mathbf{t}\_{wc}$ and optical-to-world rotation $R\_{wc}$ are obtained from the robot kinematic model.
 
 $$
 \mathbf{p}_w=[p_x,p_y,0.04]^T,\qquad
