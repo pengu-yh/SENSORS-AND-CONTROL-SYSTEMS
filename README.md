@@ -6,6 +6,9 @@ The cube position is estimated once from the camera image and depth data, transf
 
 To evaluate robustness, the cube position is randomised on every trial, the cube slides across the table before coming to rest, and sensor measurements contain noise. The system is designed to localise and pick up the cube despite these variations.
 
+Project Group Number: 34
+
+
 Contribution
 Part A: Dija
 Part B:Alzaid Muhammed 

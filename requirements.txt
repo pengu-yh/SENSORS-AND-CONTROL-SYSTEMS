@@ -5,21 +5,19 @@ matplotlib
 scipy
 
 #run in order, check python ver for something i dont remember
-# py -m venv .venv
-# .\.venv\Scripts\Activate.ps1
-# python -m pip install --upgrade pip
-# python -m pip install --upgrade pip setuptools wheel
-# python -m pip install --only-binary=:all: mujoco
-# python -m pip install numpy scipy 
-# python -m pip install opencv-python
+ py -m venv .venv
+ .\.venv\Scripts\Activate.ps1
+ python -m pip install --upgrade pip
+ python -m pip install --upgrade pip setuptools wheel
+ python -m pip install --only-binary=:all: mujoco
+ python -m pip install numpy scipy 
+ python -m pip install opencv-python
+ python -m pip install matplotlib
+ python -m pip install cv2
 
-#notes
-# note that the controller is  PD controller the reason its not fully built by that i mean its pretty simple rather than a lqr or pid is due to the nature of the XML being tha the joints are essentially "perfect"
-# and have no noise
-# also note that we use PBVS for the camera
-# note that the controller and simulation are positional acutator based
-# note that in order to randomise the position of the box line 30 on the main.py 1st arugment simply change those parameters so its still visible ot the bot but in a differnet place of course
-# other than that most of the code is alright and can/should be improved upon
-# u can modify the speed of the simulation if u change the durations in main.py but i wouldnt
-# other than that when u guys present ill probably be asleep as i spent all night fixing my controller so hopefully we pass the simulation
-# BIG NOTE WARNING WARNING BIG LOOK AT THIS ONE, sometimes the simulation but genuinely spawn the box in a unreachable place for the arm, i dont know how to fix this but hey we ball
+
+# to run the simulation, run main.py witth the following command in the terminal
+# also make sure the path is set to the repo's folder
+python main.py --seeds x --headless
+# x can be any number of sims and headless is optional, if you want to see the simulation then dont add it, if you want to run it faster then add it
+

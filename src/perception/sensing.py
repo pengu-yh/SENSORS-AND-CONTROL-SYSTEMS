@@ -11,6 +11,7 @@ import cv2
 import mujoco
 import numpy as np
 from scipy.optimize import least_squares
+from pathlib import Path
 
 FLIP = np.diag([1., -1., -1.])
 
@@ -24,6 +25,10 @@ class camera:
         self.cam_id = model.camera(cam_name).id
         self.f = (self.H / 2) / np.tan(np.deg2rad(float(model.cam_fovy[self.cam_id])) / 2)
         self.K = np.array([[self.f, 0., self.W/2], [0., self.f, self.H/2], [0., 0., 1.]])
+        cal = Path(__file__).resolve().parents[2] / "results" / "calibration.npz"
+        if cal.exists():
+            self.f = 0.5 * (np.load(cal)["K"][0, 0] + np.load(cal)["K"][1, 1])
+            self.K = np.array([[self.f, 0., self.W/2], [0., self.f, self.H/2], [0., 0., 1.]])
         self.ren = mujoco.Renderer(model, self.H, self.W)
         self.scratch = mujoco.MjData(model)
         self.rng = np.random.default_rng(seed)
