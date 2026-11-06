@@ -1,5 +1,5 @@
-mujoco==3.16.0
+mujoco
 numpy
+scipy
 opencv-python
 matplotlib
-scipy
