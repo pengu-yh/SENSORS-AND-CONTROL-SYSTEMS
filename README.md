@@ -90,13 +90,13 @@ per-joint obsv rank: 2 / 2
 
 ### 6.1 Purpose and State Definition
 
-The wrist RGB-D camera supplies discrete, noisy observations of the moving cube, but does not directly measure its velocity. A **four-state Extended Kalman Filter (EKF)** estimates the cube's planar position and velocity in the world frame:
+The wrist RGB-D camera supplies discrete, noisy observations of the moving cube but does not directly measure its velocity. A **four-state Extended Kalman Filter (EKF)** estimates the cube's planar position and velocity in the world frame:
 
 $$
 \mathbf{x}_k = [p_x,\ p_y,\ v_x,\ v_y]^T.
 $$
 
-The cube's visible top is assumed to have a known world-frame height of **0.04 m**, based on scene geometry. This height is not read from live simulator ground truth.
+The cube's visible top is assumed to have a known world-frame height of **0.04 m** based on scene geometry. This height is not read from live simulator ground truth.
 
 ### 6.2 Constant-Velocity Prediction
 
@@ -134,7 +134,7 @@ f_xX_c/Z_c+c_x\cr f_yY_c/Z_c+c_y\cr Z_c
 \end{bmatrix}.
 $$
 
-This measurement is nonlinear because the projected pixel coordinates depend on depth. The filter therefore uses an analytical measurement Jacobian $H_k=\partial h/\partial\mathbf{x}$, rather than treating the RGB-D measurement as a direct linear observation of world position. The measurement Jacobian has zero columns for the velocity states; velocity is inferred from observations over time.
+This measurement is nonlinear because the projected pixel coordinates depend on depth. The filter therefore uses an analytical measurement Jacobian $H_k=\partial h/\partial\mathbf{x}$ rather than treating the RGB-D measurement as a direct linear observation of world position. The measurement Jacobian has zero columns for the velocity states; velocity is inferred from observations over time.
 
 ### 6.4 EKF Correction and Uncertainty
 
@@ -156,7 +156,7 @@ $$
 P_k=(I-K_kH_k)P^-_k(I-K_kH_k)^T+K_kRK_k^T.
 $$
 
-This formulation is chosen for numerical robustness. The filter initialises from the first valid RGB-D detection transformed into world coordinates, with zero initial velocity. Missing detections or invalid camera geometry are rejected rather than used for a measurement correction.
+This formulation is chosen for numerical robustness. The filter initialises from the first valid RGB-D detection transformed into world coordinates with zero initial velocity. Missing detections or invalid camera geometry are rejected rather than used for a measurement correction.
 
 | EKF parameter | Implemented value |
 |---|---|
@@ -178,11 +178,11 @@ $$
 \mathbf{p}_{\mathrm{target},xy}=\hat{\mathbf{p}}_{xy}+0.15\hat{\mathbf{v}}_{xy}.
 $$
 
-This target is supplied to the inverse-kinematics and motion-control pipeline. It is a **predicted cube target**, not a measurement of the robot's actual tool-centre-point position.
+This target is supplied to the inverse-kinematics and motion-control pipeline. It is a **predicted cube target** not a measurement of the robot's actual tool-centre-point position.
 
 ### 6.6 Dedicated EKF Evaluation (Test N)
 
-The script `test_N_ekf_visualization.py` evaluates RGB-D localisation and EKF tracking in a **10-second** simulation. The cube is driven along a prescribed moving trajectory for the first **6 seconds** and then stops. Camera observations are requested approximately every **0.10 seconds**. Simulator cube truth is used to drive the test motion and **evaluate error only**, not as the EKF measurement.
+The script `test_N_ekf_visualization.py` evaluates RGB-D localisation and EKF tracking in a **10-second** simulation. The cube is driven along a prescribed moving trajectory for the first **6 seconds** and then stops. Camera observations are requested approximately every **0.10 seconds**. Simulator cube truth is used to drive the test motion and **evaluate error only** not as the EKF measurement.
 
 Run from the repository root:
 
@@ -226,16 +226,137 @@ The corrected isolated test detected the cube in **100/100 frames** and accepted
 | Stopped (from 7 s) | 0.4689 mm | 0.4687 mm |
 | Entire trial | 0.5195 mm | 0.5198 mm |
 
-After stopping, the mean EKF-estimated speed was **0.000215 m/s** (0.215 mm/s). These results show reliable detection and sub-millimetre position estimation in this particular fixed-scan test. **The EKF does not improve overall position RMSE over raw RGB-D in this trial** (0.5198 mm versus 0.5195 mm). Its additional value is estimating velocity and enabling short-horizon prediction. These figures are from a single dedicated test, not a statistical guarantee across randomised trials.
+After stopping, the mean EKF-estimated speed was **0.000215 m/s** (0.215 mm/s). These results show reliable detection and sub-millimetre position estimation in this particular fixed-scan test. **The EKF does not improve overall position RMSE over raw RGB-D in this trial** (0.5198 mm versus 0.5195 mm). Its additional value is estimating velocity and enabling short-horizon prediction. These figures are from a single dedicated test not a statistical guarantee across randomised trials.
 
 #### Posterior Covariance and ±3σ Consistency
 
 ![EKF signed position errors and posterior 3-sigma bounds](test_N_results/07_EKF_uncertainty_3sigma.png)
 
-*Figure C7. Signed EKF X and Y estimation errors compared separately with posterior ±3σ bounds, computed from $P_{xx}$ and $P_{yy}$. The bounds express the filter's model-based marginal uncertainty, not a guaranteed error limit.*
+*Figure C7. Signed EKF X and Y estimation errors compared separately with posterior ±3σ bounds computed from $P_{xx}$ and $P_{yy}$. The bounds express the filter's model-based marginal uncertainty, not a guaranteed error limit.*
 
 The seventh plot is generated by the updated Test N script. Inspect whether the signed errors remain consistent with the reported covariance; no coverage percentage is asserted before examining the actual output. The CSV also records `sigma_x` and `sigma_y` for reproducibility.
 
-**Evaluation scope:** Test N isolates cube sensing and estimation; it uses the simulated joint configuration for camera localisation. It therefore does not validate the full joint-observer and LQR pipeline or disturbance robustness. The separate integrated 30/30 nominal pick-and-lift regression should be reported under system integration, not as Test N EKF accuracy.
+**Evaluation scope:** Test N isolates cube sensing and estimation. It uses the simulated joint configuration for camera localisation. It therefore does not validate the full joint-observer and LQR pipeline or disturbance robustness. The separate integrated 30/30 nominal pick-and-lift regression should be reported under system integration not as Test N EKF accuracy.
 
 **Uncertainty evidence:** Figure C7 compares signed estimation errors with posterior marginal ±3σ bounds. The plot requires rerunning the updated Test N script and committing its generated PNG.
+
+
+## 9. Simulation and Controller Parameters
+
+The following tables summarise the default parameters used in the integrated UR3e moving-cube tracking and pick-and-lift simulation. Values are taken from all the working files of the team. Unless otherwise stated, these are nominal settings, command-line arguments can override selected values.
+
+### 9.1 Simulation and RGB-D Sensing
+
+| Parameter | Default value | Unit / Description |
+|---|---|---|
+| Robot | UR3e | 6-DOF manipulator |
+| Simulator | MuJoCo | Physics simulation |
+| Control timestep | `m.opt.timestep` | s; defined by the MuJoCo model |
+| Camera resolution | 640 × 480 | pixels |
+| Camera sampling interval | 0.10 | s (10 Hz) |
+| Cube size | 0.04 | m |
+| Cube-top reference height | 0.04 | m |
+| RGB noise standard deviation | 4.0 | image intensity units |
+| Depth noise standard deviation | 0.001 + 0.005 × depth² | m; depth-dependent |
+| Encoder noise standard deviation | 0.0005 | rad |
+| Camera noise scale | 1.0 | `--depth-noise` |
+| Encoder noise scale | 1.0 | `--enc-noise` |
+
+### 9.2 Cube Extended Kalman Filter
+
+| Parameter | Default value | Unit / Description |
+|---|---|---|
+| State vector | [px, py, vx, vy] | 4 states |
+| Process model | Constant velocity | Planar cube motion |
+| EKF prediction interval | 0.10 | s nominal; elapsed time can be used |
+| Acceleration noise standard deviation | 0.30 | m/s² |
+| Pixel measurement noise | 2.0 | px per axis |
+| Depth measurement noise | 0.006 | m |
+| Initial position uncertainty | 0.02 | m standard deviation |
+| Initial velocity uncertainty | 0.20 | m/s standard deviation |
+| Initial velocity estimate | 0 | m/s |
+| Prediction horizon | 0.15 | s (`--tau`) |
+| Measurement covariance | diag(4, 4, 0.000036) | px², px², m² |
+
+### 9.3 Joint-State Observer
+
+| Parameter | Default value | Unit / Description |
+|---|---|---|
+| State dimension | 12 | 6 joint positions + 6 velocities |
+| Measured states | Joint positions | 6 encoder readings |
+| Observer model | Constant acceleration input | Discrete Kalman filter |
+| Observer timestep | `m.opt.timestep` | s |
+| Acceleration process noise | 1.0 | rad/s² |
+| Assumed encoder noise | 0.0005 | rad at nominal scale |
+| Observer encoder-noise scale | 1.0 | `--obs-enc-scale` |
+| Initial velocity estimate | 0 | rad/s |
+| Initial velocity uncertainty | 0.5 | rad/s standard deviation |
+| Covariance update | Joseph form | Numerical robustness |
+
+### 9.4 Computed-Torque and LQR Controller
+
+| Parameter | Default value | Unit / Description |
+|---|---|---|
+| Controller | Computed torque + discrete LQR | Joint-space feedback |
+| LQR position weight | 2500 | `q_w` |
+| LQR velocity weight | 1.0 | `qd_w` |
+| LQR acceleration-effort weight | 1.0 | `r` |
+| LQR state | [joint position error, joint velocity error] | Per joint |
+| Control timestep | `m.opt.timestep` | s |
+| Joint 1–2 torque limits | ±56 | Nm |
+| Joint 3 torque limit | ±28 | Nm |
+| Joint 4–6 torque limits | ±12 | Nm |
+| Reference joint-step limit | 0.016 | rad per camera update |
+| Joint-velocity feedforward limit | 0.6 | rad/s |
+| Damped least-squares parameter | 0.03 | Jacobian damping |
+| Controller model mass scale | 1.0 | `--mass-mismatch` |
+
+The LQR gains are calculated using the discrete algebraic Riccati equation. They are not fixed numerical gains entered manually.
+
+### 9.5 Tracking, Pick and Safety Logic
+
+| Parameter | Default value | Unit / Description |
+|---|---|---|
+| Moving-cube trajectory stop time | 6.0 | s |
+| Temporary pause start | 3.0 | s |
+| Temporary pause duration | 0.20 | s (2 camera frames) |
+| Stationary speed threshold | 0.003 | m/s |
+| Tracking TCP-to-cube tolerance | 0.005 | m |
+| Stationary confirmation | 5 | consecutive camera frames |
+| Verification duration | 0.30 | s |
+| Verification position tolerance | 0.003 | m |
+| Maximum fresh-detection age | 0.15 | s |
+| Approach target height | 0.12 | m |
+| Approach duration | 1.5 | s |
+| Approach motion speed threshold | 0.004 | m/s |
+| Approach motion debounce | 3 | consecutive camera updates |
+| Approach displacement abort threshold | 0.005 | m |
+| Descent target height | 0.035 | m |
+| Descent duration | 2.0 | s |
+| Lift distance command | 0.15 | m |
+| Lift duration | 1.5 | s |
+| Successful lift threshold | 0.10 | m |
+| Maximum trial simulation time | 20.0 | s |
+
+### 9.6 Randomisation and Robustness Testing
+
+| Parameter | Default / Range | Unit / Description |
+|---|---|---|
+| Cube starting X offset | ±0.015 | m |
+| Cube starting Y offset | ±0.015 | m |
+| Cube friction coefficient | 0.5–1.2 | Randomised per trial |
+| Cube mass | 0.02–0.08 | kg |
+| Lighting scale | 0.6–1.2 | Relative multiplier |
+| Motion trajectories | 6 | Horizontal, vertical, diagonal, square, circle, zigzag |
+| Trajectory amplitude scale | 1.0 | Maximum nominal scale |
+| Workspace X | 0.20–0.34 | m |
+| Workspace Y | 0.04–0.16 | m |
+| Workspace safety margin | 0.005 | m |
+| Added random torque disturbance | 0.0 | Nm standard deviation |
+| Constant torque bias | 0.0 | Nm |
+| Controller mass mismatch | 1.0 | Nominal model multiplier |
+| Default random seed | 42 | Reproducibility |
+| Default number of trials | 1 | `--seeds` |
+| Simulation mode | Viewer enabled | Use `--headless` for batch tests |
+
+**Notes:** The torque limits are defined in `robot_model/pick_scene.xml`. The physics timestep is read from the MuJoCo model rather than hard-coded in `main.py`. The six motion trajectories are generated by scripted simulation motion while the estimator and controller use sensor-derived estimates. Default disturbance values are zero and non-zero robustness settings must be specified explicitly.
