@@ -223,9 +223,9 @@ The corrected isolated test detected the cube in **100/100 frames** and accepted
 
 | Interval | Raw RGB-D 2D position RMSE | EKF 2D position RMSE |
 |---|---:|---:|
-| Moving (0–6 s) | 0.5496 mm | 0.5524 mm |
-| Stopped (from 7 s) | 0.4689 mm | 0.4687 mm |
-| Entire trial | 0.5195 mm | 0.5198 mm |
+| Moving (0–6 s) | 0.5304 mm | 0.5330 mm |
+| Stopped (from 7 s) | 0.4665 mm | 0.4663 mm |
+| Entire trial | 0.5070 mm | 0.5069 mm |
 
 After stopping, the mean EKF-estimated speed was **0.000196 m/s (0.196 mm/s)**. These results show reliable detection and sub-millimetre position estimation in this particular fixed-scan test. **The EKF’s overall position RMSE is essentially identical to raw RGB-D in this trial (0.5069 mm versus 0.5070 mm)**. Its additional value is estimating velocity and enabling short-horizon prediction. These figures are from a single dedicated test not a statistical guarantee across randomised trials.
 
