@@ -243,6 +243,34 @@ Over the trial, 99% of the signed errors stay inside the ±3σ bounds. The CSV a
 **Evaluation scope:** Test N isolates cube sensing and estimation. It uses the simulated joint configuration for camera localisation. It therefore does not validate the full joint-observer and LQR pipeline or disturbance robustness. The separate integrated 12/12 nominal pick-and-lift regression should be reported under system integration not as Test N EKF accuracy.
 
 
+### Section 5.7 Joint Observer
+
+The encoders measure the joint angles only. A second Kalman filter is then used to estimate all of the joint angles and velocities from those noisy readings. The controller runs on this estimate and never reads the true state of the joints.
+
+**Model.** Each joint is a double integrator, driven by the acceleration the controller commanded:
+
+$$
+\begin{bmatrix}q\\ \dot q\end{bmatrix}_{k+1}=
+\begin{bmatrix}1&\Delta t\\0&1\end{bmatrix}
+\begin{bmatrix}q\\ \dot q\end{bmatrix}_{k}+
+\begin{bmatrix}\Delta t^2/2\\ \Delta t\end{bmatrix}a_k+w_k,\qquad
+y_k=q_k+v_k
+$$
+
+Using the commanded acceleration as a input means the filter does not have to accept the arms motion as noise. The process noise $w_k$ (acceleration standard deviation 1.0 rad/s²) only is there to cover what the acceleration does not explain. The encoder noise $v_k$ has standard deviation 0.0005 rad. The covariance uses the Joseph form.
+
+**Result** (joint 2, circle path, seed 42, nominal run):
+
+| Quantity | Value |
+|---|---|
+| Angle error RMS | 0.160 mrad |
+| Velocity error RMS | 0.0049 rad/s |
+| Inside ±3σ, angle | 100.00 % |
+| Inside ±3σ, velocity | 99.87 % |
+
+Both percentages are at or above 99.7% expected for a consistent Gaussian filter, so the uncertainty reported by the filter is not too much. velocity is never measured so the error is for a state from purely angle readings. The error is measured against true state for evaluation only.
+
+
 ## 6. Simulation and Controller Parameters
 
 The following tables summarise the default parameters used in the integrated UR3e moving-cube tracking and pick-and-lift simulation. Values are taken from all the working files of the team. Unless otherwise stated, these are nominal settings, command-line arguments can override selected values.
