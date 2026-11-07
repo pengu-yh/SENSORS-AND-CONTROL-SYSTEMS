@@ -415,6 +415,23 @@ $$
 - ![Frame diagram: pixel, camera, MuJoCo camera and base frames](frame_diagram.png)
 *Figure B1. Coordinate frames and the estimation chain from encoders to the base-frame cube position. Ground truth is used for evaluation only.*
 
+**Calibration.** The intrinsics of the camera were calibrated using the chessboard procedure (OpenCV `calibrateCamera`). A board (8 × 6 squares, 20 mm) was rendered from 20 different poses using the wrist camera's specification, the inner corners were found and refined to sub-pixel accuracy, and the intrinsic matrix was fitted:
+
+| Parameter | Calibrated value |
+|---|---|
+| $f_x$ | 376.43 px |
+| $f_y$ | 376.51 px |
+| $c_x$ | 319.53 px |
+| $c_y$ | 239.13 px |
+| Reprojection error (RMS) | 0.133 px (worst view 0.182 px) |
+
+The focal length of the camera differs from the simulators nominal value (376.72 px) by 0.08 %. The distortion terms  ($k_1 = 0.0245$, $k_2 = -0.1705$) are fitting items: the camera simulated has an ideal pinhole with no lens distortion, so no correction is applied The calibrated focal length is loaded by the sensing code (`results/calibration.npz`) and the principal point is kept at the image centre.
+
+![Detected chessboard corners used for calibration](results/calibration_corners.png)
+*Figure B2. Detected chessboard corners from the calibration views.*
+
+**Limitations of the sensing.** The position of the cube uses the blobs median depth not the depth of its top face, so there's a tiny bias that's carried accross and is dependent on viewing angle. There is no hand-eye calibration the camera's mounting pose on the wrist is taken from the model, not estimated.
+
 
 ## Results
 
