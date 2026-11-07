@@ -548,4 +548,21 @@ Every failure below was traced to a specific cause rather than guessed at.
 - Simulation only. The workspace check is sampled inverse kinematics plus camera field of view, not continuous collision checking, and there is no physical robot safety validation.
 
 
+## Generative AI Declaration
 
+**Tool:** Claude (Anthropic).
+
+**Purpose:**
+- Wrote, with our testing and fixes, assisted with the helper scripts: camera calibration (`calibrate_camera.py`), result plotting (`plot_estimation.py`, `plot_path.py`), the sensing check script, and the frame diagram.
+- Reviewed our code and helped debug errors, and helped with Git and GitHub Pages.
+- Drafted and edited sections of this project page; we checked every number against our own program output.
+
+The pipeline itself (sensing, estimators, controller and `main.py`) was written by the team. All results on this page come from running the submitted code.
+
+
+**Tool:** Copilot (GitHub).
+
+***Purpose**
+- Wrote and drafted the commit messages for the repository.
+
+The commits themselves were made by the team.
