@@ -27,7 +27,7 @@ Contribution
 - Part A:  Dija
 - Part B:  Alzaid Muhammed 
 - Part C:  Do Nguyen Khoi Nguyen 
-- Part D:  Alzaid Muhammed, Leon Markovic 
+- Part D:  Leon Markovic 
 - Part E:  All members
  
 | Item | Value |
@@ -259,6 +259,8 @@ $$
 
 Using the commanded acceleration as a input means the filter does not have to accept the arms motion as noise. The process noise $w_k$ (acceleration standard deviation 1.0 rad/s²) only is there to cover what the acceleration does not explain. The encoder noise $v_k$ has standard deviation 0.0005 rad. The covariance uses the Joseph form.
 
+It is implemented as one 12-state filter; because each joint has its own identical, independent model, this is equivalent to six separate two-state filters. The acceleration input is the controller's commanded acceleration before torque clipping.
+
 **Result** (joint 2, circle path, seed 42, nominal run):
 
 | Quantity | Value |
@@ -395,7 +397,12 @@ The LQR gains are calculated using the discrete algebraic Riccati equation. They
 
 **Sensor.** The wrist-mounted RGB-D camera is simulated in MuJoCo and renders 640 × 480 images at 10 Hz. Artificial noise is added to every frame: gaussian RGB noise (std deviation of 4 intensity units) and depth noise that increases with distance (standard deviation 0.001 + 0.005 × depth² m). Ground truth again is never used by the sensing pipeline
 
-**Detection.** The red cube is found by colour. The RGB image is converted to HSV (hue saturation value), thresholded on a red mask, as the largest blob of the detected pixels is treated as the cube. The centroid of the cube gives its pixel position $(u, v)$ and the median depth of the blob gives $Z$. if no cube/blob is found the frame is rejected.
+**Detection.** Detection has two stages.
+
+1. *Colour mask.* The image is converted to HSV and thresholded for red (hue wraps around, so two ranges: 0–12 and 170–179, with saturation ≥ 90 and value ≥ 70). A 3 × 3 morphological opening removes speckle, and the largest connected blob (at least 25 px) is kept.
+2. *Top-face fit.* Each blob pixel with a valid depth is back-projected to a 3D point in the base frame using the camera pose from $\hat q$. Only points within 3.5 mm of the cube's known top height (0.04 m) are kept, which isolates the top face and rejects the sides. The outline of the largest top-face region is extracted, and the cube centre is found by fitting a 40 mm square to that outline: the square's four edges are projected into the image and a robust least-squares fit (SciPy `least_squares`, soft-L1 loss, five starting points) moves the centre until the projected edges sit on the observed outline. The cube's yaw is fixed at zero.
+
+The fitted centre, at the top-face height, is the measurement given to the cube EKF. If either stage finds too few points, the frame is rejected.
 
 **From pixels to the base frame.** A pixel and its depth are turned into a 3D point with the inverse of the camera matrix, then moved through the camera pose into the robot base frame:
 
@@ -430,20 +437,19 @@ The focal length of the camera differs from the simulators nominal value (376.72
 ![Detected chessboard corners used for calibration](results/calibration_corners.png)
 *Figure B2. Detected chessboard corners from the calibration views.*
 
-**Limitations of the sensing.** The position of the cube uses the blobs median depth not the depth of its top face, so there's a tiny bias that's carried accross and is dependent on viewing angle. There is no hand-eye calibration the camera's mounting pose on the wrist is taken from the model, not estimated.
+**Limitations of the sensing.** The fit relies on prior knowledge: the cube's size (40 mm), its top height (0.04 m), and that it is upright with zero yaw. It would not work on an unknown or rotated object without extension (the code has an optional yaw fit, switched off because a square's symmetry makes it unstable). The camera's intrinsics are calibrated (above), but its mounting pose on the wrist (hand-eye / extrinsic calibration) was not estimated: it is taken from the simulator model, which is exact in simulation. On a real robot it would have to be measured, because a small mounting error would shift every cube position.
 
 ## 8. Control (Part D)
 
 **Structure.** The controller has 2 layers in specific, both running on **estimated** joint state $\hat q$, $\dot{\hat q}$ from the observer (section 5.7), never the true state.
 
-1. **Computed torque (feedback linearisation).** The commanded torque cancels the arm's own dynamics:
+1. **Computed torque (feedback linearisation).** The commanded torque cancels the arm's own dynamics, using the mass matrix $M$ and the gravity and Coriolis bias $h$ evaluated at the estimated state:
 $$
-\tau = M(q)\,a + h(q,\dot q)
+\tau = M(\hat q)\,a + h(\hat q,\dot{\hat q})
 $$
+With the model terms cancelled, each joint behaves like a simple double integrator, $\ddot q = a$, where $a$ is the acceleration we choose.
 
-With the terms canceled the joint is now essentially a simple double integrator,  $\ddot q = a$, where $a$ is the acceleration we choose.
-
-**Per-joint LQR.** The chosen acceleration is $a = a_{ref} - K\,[\,e_q,\ e_{\dot q}\,]^T$, where $e_q$ and $e_{\dot q}$ are the position and velocity errors against the reference. The gain $K$ comes from the design of the LQR on the integrator, solved using the ricatti equation.
+2. **Per-joint LQR.** The chosen acceleration is $a = -K\,[\,e_q,\ e_{\dot q}\,]^T$, with $e_q = \hat q - q_{ref}$ and $e_{\dot q} = \dot{\hat q} - \dot q_{ref}$. The reference velocity $\dot q_{ref}$ is the velocity feedforward. The gain comes from a discrete LQR design on the double integrator, $K = (R + B^TPB)^{-1}B^TPA$, where $P$ solves the discrete algebraic Riccati equation (not hand-entered). The resulting torques are clipped to the motor limits.
 
 **Why this structure.** The open loop arm is generally unstable section 4: a real pole at +2.84), so feedback is required. The torque is computed and removes the gravity and coupling terms that made it unstable so a small 2 state LQR per joint is enough. The cost is that the result depends on the model being accurate; section 10 shows what happens when it is not (mass ×1.3 plus a torque bias fails).
 
@@ -534,7 +540,6 @@ Every failure below was traced to a specific cause rather than guessed at.
 
 **Other limitations**
 - No integral action, so constant torque biases and large model errors are not rejected.
-- The cube depth used by the EKF is the median depth of the whole blob, not the depth of the top face.
 - The descent and lift are open-loop from the locked position: if the cube moved after lock-in, the arm would not see it.
 - The suction grasp is a weld constraint created at contact from the true relative pose, a simulation shortcut.
 - The model has no joint friction or damping; damping comes from the controller.
