@@ -68,7 +68,7 @@ A = [ 0   I ]    B = [ 0     ]    C = [ I  0 ]
     [ K̃   0 ]        [ M⁻¹ ]
 ```
 
-`K̃ = −M⁻¹ ∂g/∂q` is the effect of gravity on small deviations. The velocity is not measured, so it has to be estimated by the observer (section 6).
+`K̃ = −M⁻¹ ∂g/∂q` is the effect of gravity on small deviations. The velocity is not measured, so it has to be estimated by the observer (section 5.7).
 
 **Analysis** (`src/control/model_analysis.py`):
 when ran output:
@@ -87,9 +87,9 @@ per-joint obsv rank: 2 / 2
 - **Open-loop poles:** ±5.5, ±2.84, ±1.65j and ±1.69j. The real poles show that the arm is unstable without feedback: gravity acts like negative stiffness, so a small tilt grows. The imaginary pairs are oscillatory modes.
 
 
-## 6. State Estimation — Moving-Cube EKF (Part C)
+## 5. State Estimation — Moving-Cube EKF (Part C)
 
-### 6.1 Purpose and State Definition
+### 5.1 Purpose and State Definition
 
 The wrist RGB-D camera supplies discrete, noisy observations of the moving cube but does not directly measure its velocity. A **four-state Extended Kalman Filter (EKF)** estimates the cube's planar position and velocity in the base frame:
 
@@ -99,7 +99,7 @@ $$
 
 The cube's visible top is assumed to have a known base frame height of **0.04 m** based on scene geometry. This height is not read from live simulator ground truth.
 
-### 6.2 Constant-Velocity Prediction
+### 5.2 Constant-Velocity Prediction
 
 Between camera measurements, the cube is approximated by a constant-velocity model:
 
@@ -118,7 +118,7 @@ $$
 
 The implementation uses an acceleration-noise standard deviation of **0.30 m/s²** by default. The prediction interval can use the elapsed time between camera observations.
 
-### 6.3 Nonlinear RGB-D Observation
+### 5.3 Nonlinear RGB-D Observation
 
 Each valid detection supplies the measurement **$\mathbf{z}_k=[u,v,Z]^T$**, where $u,v$ are image coordinates and $Z$ is camera-frame depth. The camera position $\mathbf{t}\_{wc}$ and optical-to-base rotation $R\_{wc}$ are obtained from forward kinematics of the estimated joint angles.
 
@@ -137,7 +137,7 @@ $$
 
 This measurement is nonlinear because the projected pixel coordinates depend on depth. The filter therefore uses an analytical measurement Jacobian $H_k=\partial h/\partial\mathbf{x}$ rather than treating the RGB-D measurement as a direct linear observation of base position. The measurement Jacobian has zero columns for the velocity states; velocity is inferred from observations over time.
 
-### 6.4 EKF Correction and Uncertainty
+### 5.4 EKF Correction and Uncertainty
 
 For a valid camera detection, the filter computes:
 
@@ -171,7 +171,7 @@ This formulation is chosen for numerical robustness. The filter initialises from
 | Cube-top height | 0.04 m |
 | Lookahead horizon | 0.15 s |
 
-### 6.5 Predictive Target for Visual Tracking
+### 5.5 Predictive Target for Visual Tracking
 
 The estimated planar velocity supports a short lookahead target:
 
@@ -181,7 +181,7 @@ $$
 
 This target is supplied to the inverse-kinematics and motion-control pipeline. It is a **predicted cube target** not a measurement of the robot's actual tool-centre-point position.
 
-### 6.6 Dedicated EKF Evaluation (Test N)
+### 5.6 Dedicated EKF Evaluation (Test N)
 
 The script `test_N_ekf_visualization.py` evaluates RGB-D localisation and EKF tracking in a **10-second** simulation. The cube is driven along a prescribed moving trajectory for the first **6 seconds** and then stops. Camera observations are requested approximately every **0.10 seconds**. Simulator cube truth is used to drive the test motion and **evaluate error only** not as the EKF measurement.
 
@@ -240,11 +240,11 @@ Over the trial, 99% of the signed errors stay inside the ±3σ bounds. The CSV a
 **Evaluation scope:** Test N isolates cube sensing and estimation. It uses the simulated joint configuration for camera localisation. It therefore does not validate the full joint-observer and LQR pipeline or disturbance robustness. The separate integrated 12/12 nominal pick-and-lift regression should be reported under system integration not as Test N EKF accuracy.
 
 
-## 9. Simulation and Controller Parameters
+## 6. Simulation and Controller Parameters
 
 The following tables summarise the default parameters used in the integrated UR3e moving-cube tracking and pick-and-lift simulation. Values are taken from all the working files of the team. Unless otherwise stated, these are nominal settings, command-line arguments can override selected values.
 
-### 9.1 Simulation and RGB-D Sensing
+### 6.1 Simulation and RGB-D Sensing
 
 | Parameter | Default value | Unit / Description |
 |---|---|---|
@@ -261,7 +261,7 @@ The following tables summarise the default parameters used in the integrated UR3
 | Camera noise scale | 1.0 | `--depth-noise` |
 | Encoder noise scale | 1.0 | `--enc-noise` |
 
-### 9.2 Cube Extended Kalman Filter
+### 6.2 Cube Extended Kalman Filter
 
 | Parameter | Default value | Unit / Description |
 |---|---|---|
@@ -277,7 +277,7 @@ The following tables summarise the default parameters used in the integrated UR3
 | Prediction horizon | 0.15 | s (`--tau`) |
 | Measurement covariance | diag(4, 4, 0.000036) | px², px², m² |
 
-### 9.3 Joint-State Observer
+### 6.3 Joint-State Observer
 
 | Parameter | Default value | Unit / Description |
 |---|---|---|
@@ -292,7 +292,7 @@ The following tables summarise the default parameters used in the integrated UR3
 | Initial velocity uncertainty | 0.5 | rad/s standard deviation |
 | Covariance update | Joseph form | Numerical robustness |
 
-### 9.4 Computed-Torque and LQR Controller
+### 6.4 Computed-Torque and LQR Controller
 
 | Parameter | Default value | Unit / Description |
 |---|---|---|
@@ -313,7 +313,7 @@ The following tables summarise the default parameters used in the integrated UR3
 
 The LQR gains are calculated using the discrete algebraic Riccati equation. They are not fixed numerical gains entered manually.
 
-### 9.5 Tracking, Pick and Safety Logic
+### 6.5 Tracking, Pick and Safety Logic
 
 | Parameter | Default value | Unit / Description |
 |---|---|---|
@@ -337,7 +337,7 @@ The LQR gains are calculated using the discrete algebraic Riccati equation. They
 | Successful lift threshold | 0.10 | m |
 | Maximum trial simulation time | 20.0 | s |
 
-### 9.6 Randomisation and Robustness Testing
+### 6.6 Randomisation and Robustness Testing
 
 | Parameter | Default / Range | Unit / Description |
 |---|---|---|
