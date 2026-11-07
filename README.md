@@ -457,10 +457,15 @@ With the terms canceled the joint is now essentially a simple double integrator,
 
 for the integrator (double) the gain is $K_1 \approx \sqrt{q_w/r} = 50$ and $K_2 \approx \sqrt{1 + 2K_1} \approx 10$. This gives the poles in the closed loop near $-5 \pm 5j$ (natural frequency about 7 rad/s, damping ratio about 0.71). A ratio of damping around 0.7 gives a fast response with little overshoot.
 
-**What limits the weights.**
+**What limits the weights.** Raising $q_w$ or lowering $r$ increases $K$ will incrase the speed of the tracking but also increases the noise in $\dot{\hat q}$, this pushes the commanded torque toward the limits of the joints (±56, ±56, ±28, ±12, ±12, ±12 Nm),a nd approaches the rate at which new references arrive (10 Hz camera updates).
+- **Joint limits.** Commanded torques are clipped at those limits.
 
+**Reference generation.** The cube target from the EKF (section 5.5) is turned into joint references by damped least-squares inverse kinematics (damping 4e-4). The reference will then move by 0.016 rad every time the camera updates so the arm doesn't malfunction or jump. A velocity term is then used (damping 0.03, capped at 0.6 rad/s) and lets the arm follow a moving cube without lagging behind it.
 
-## Results
+**Pick sequence.** TRACK → VERIFY (0.3 s) → APPROACH (to 0.12 m above the cube, 1.5 s) → DESCEND (to 0.035 m, 2.0 s) → LIFT (+0.15 m, 1.5 s).
+The pick will count as a successful pick if the cube is raised above limit of 0.1m. The camera is used during the first 3 stages, while DESCENT and lift run open-loop from the position locked at the end of the approach. The suction end effector is simulated by a weld constraint created on contact.
+
+## 9. Results
 
 ### Nominal batch: 12 seeds, all six paths
 
@@ -513,7 +518,7 @@ Under disturbance the joint 2 velocity error rises by 37% (0.0049 → 0.0067 rad
 
 In the standard trial the cubes position error is 1.13mm on average over the trial, and 0.39mm once the cube is at rest. The largest error is 12mm, in the early transient while the filter starts and arm moves to pick. The disturbed trial stays inside the bounds and picks successfully, but needs more aborts/countdown restarts due to extra torque noise that makes the arm jitter slightly.
 
-## Limitations and Failure Analysis
+## 10. Limitations and Failure Analysis
 Every failure below was traced to a specific cause rather than guessed at.
 
 
