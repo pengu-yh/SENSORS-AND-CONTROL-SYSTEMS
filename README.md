@@ -432,6 +432,33 @@ The focal length of the camera differs from the simulators nominal value (376.72
 
 **Limitations of the sensing.** The position of the cube uses the blobs median depth not the depth of its top face, so there's a tiny bias that's carried accross and is dependent on viewing angle. There is no hand-eye calibration the camera's mounting pose on the wrist is taken from the model, not estimated.
 
+## 8. Control (Part D)
+
+**Structure.** The controller has 2 layers in specific, both running on **estimated** joint state $\hat q$, $\dot{\hat q}$ from the observer (section 5.7), never the true state.
+
+1. **Computed torque (feedback linearisation).** The commanded torque cancels the arm's own dynamics:
+$$
+\tau = M(q)\,a + h(q,\dot q)
+$$
+
+With the terms canceled the joint is now essentially a simple double integrator,  $\ddot q = a$, where $a$ is the acceleration we choose.
+
+**Per-joint LQR.** The chosen acceleration is $a = a_{ref} - K\,[\,e_q,\ e_{\dot q}\,]^T$, where $e_q$ and $e_{\dot q}$ are the position and velocity errors against the reference. The gain $K$ comes from the design of the LQR on the integrator, solved using the ricatti equation.
+
+**Why this structure.** The open loop arm is generally unstable section 4: a real pole at +2.84), so feedback is required. The torque is computed and removes the gravity and coupling terms that made it unstable so a small 2 state LQR per joint is enough. The cost is that the result depends on the model being accurate; section 10 shows what happens when it is not (mass ×1.3 plus a torque bias fails).
+
+**Tuning.** The LQR minimises $\sum (e^T Q e + r\,a^2)$ with
+
+| Weight | Value | Meaning |
+|---|---|---|
+| $Q$ | diag(2500, 1) | penalise position error far more than velocity error |
+| $r$ | 1 | cost of acceleration (control effort) |
+| Resulting gain $K$ | ≈ [49.5, 10] | position gain, velocity gain |
+
+for the integrator (double) the gain is $K_1 \approx \sqrt{q_w/r} = 50$ and $K_2 \approx \sqrt{1 + 2K_1} \approx 10$. This gives the poles in the closed loop near $-5 \pm 5j$ (natural frequency about 7 rad/s, damping ratio about 0.71). A ratio of damping around 0.7 gives a fast response with little overshoot.
+
+**What limits the weights.**
+
 
 ## Results
 
