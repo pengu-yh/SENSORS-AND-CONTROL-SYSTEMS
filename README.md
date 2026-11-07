@@ -22,13 +22,13 @@ This project implements track B (manipulator: vision guided pick) using a ur3e r
 
 UR3e model from link on canvas; structure adapted from the 41014 weekly tutorials and MuJoCo examples
 
-Contribution
+## Individual Contributions
 
-- Part A:  Dija
-- Part B:  Alzaid Muhammed 
-- Part C:  Do Nguyen Khoi Nguyen 
-- Part D:  Leon Markovic 
-- Part E:  All members
+- **Part A (Modelling): Dija.** 
+- **Part B (Sensing): Alzaid Muhammed.** Solely responsible for sensing: camera calibration, noise handling and frame management for Track B.
+- **Part C (Estimation): Do Nguyen Khoi Nguyen.** 
+- **Part D (Control): Leon Markovic and Alzaid Muhammed.** Alzaid wrote the inverse kinematics file and modified the LQR controller. 
+- **Part E (Integration and robustness): all members.**
  
 | Item | Value |
 |---|---|
@@ -243,7 +243,7 @@ Over the trial, 99% of the signed errors stay inside the ±3σ bounds. The CSV a
 **Evaluation scope:** Test N isolates cube sensing and estimation. It uses the simulated joint configuration for camera localisation. It therefore does not validate the full joint-observer and LQR pipeline or disturbance robustness. The separate integrated 12/12 nominal pick-and-lift regression should be reported under system integration not as Test N EKF accuracy.
 
 
-### Section 5.7 Joint Observer
+### 5.7 Joint Observer.
 
 The encoders measure the joint angles only. A second Kalman filter is then used to estimate all of the joint angles and velocities from those noisy readings. The controller runs on this estimate and never reads the true state of the joints.
 
@@ -283,7 +283,7 @@ The following tables summarise the default parameters used in the integrated UR3
 |---|---|---|
 | Robot | UR3e | 6-DOF manipulator |
 | Simulator | MuJoCo | Physics simulation |
-| Control timestep | `m.opt.timestep` | s; defined by the MuJoCo model |
+| Control timestep | `0.002` | s; defined by the MuJoCo model |
 | Camera resolution | 640 × 480 | pixels |
 | Camera sampling interval | 0.10 | s (10 Hz) |
 | Cube size | 0.04 | m |
@@ -317,7 +317,7 @@ The following tables summarise the default parameters used in the integrated UR3
 | State dimension | 12 | 6 joint positions + 6 velocities |
 | Measured states | Joint positions | 6 encoder readings |
 | Observer model | Double-integrator driven by the commanded acceleration | Discrete Kalman filter |
-| Observer timestep | `m.opt.timestep` | s |
+| Observer timestep | `0.002` | s |
 | Acceleration process noise | 1.0 | rad/s² |
 | Assumed encoder noise | 0.0005 | rad at nominal scale |
 | Observer encoder-noise scale | 1.0 | `--obs-enc-scale` |
@@ -334,7 +334,7 @@ The following tables summarise the default parameters used in the integrated UR3
 | LQR velocity weight | 1.0 | `qd_w` |
 | LQR acceleration-effort weight | 1.0 | `r` |
 | LQR state | [joint position error, joint velocity error] | Per joint |
-| Control timestep | `m.opt.timestep` | s |
+| Control timestep | `0.002` | s |
 | Joint 1–2 torque limits | ±56 | Nm |
 | Joint 3 torque limit | ±28 | Nm |
 | Joint 4–6 torque limits | ±12 | Nm |
@@ -419,7 +419,7 @@ $$
 - $F=\mathrm{diag}(1,-1,-1)$ converts from the image (optical) convention to MuJoCo's camera convention, where the camera looks along its own $-z$ axis.
 - $R_{bc}$ and $\mathbf{t}_{bc}$ are the camera's orientation and position in the base frame. These come from the kinematics of the **estimated** joint angles $\hat q$ (section 5.7), not the true ones. This is also setup to be eye in hand, the camera moves with the arm so its pose is recomputed every frame.
 
-- ![Frame diagram: pixel, camera, MuJoCo camera and base frames](frame_diagram.png)
+![Frame diagram: pixel, camera, MuJoCo camera and base frames](frame_diagram.png)
 *Figure B1. Coordinate frames and the estimation chain from encoders to the base-frame cube position. Ground truth is used for evaluation only.*
 
 **Calibration.** The intrinsics of the camera were calibrated using the chessboard procedure (OpenCV `calibrateCamera`). A board (8 × 6 squares, 20 mm) was rendered from 20 different poses using the wrist camera's specification, the inner corners were found and refined to sub-pixel accuracy, and the intrinsic matrix was fitted:
@@ -553,7 +553,7 @@ Every failure below was traced to a specific cause rather than guessed at.
 **Tool:** Claude (Anthropic).
 
 **Purpose:**
-- Wrote, with our testing and fixes, assisted with the helper scripts: camera calibration (`calibrate_camera.py`), result plotting (`plot_estimation.py`, `plot_path.py`), the sensing check script, and the frame diagram.
+- Wrote, with our testing and fixes, the helper scripts: camera calibration (`calibrate_camera.py`), result plotting (`plot_estimation.py`, `plot_path.py`), the sensing check script, and the frame diagram.
 - Reviewed our code and helped debug errors, and helped with Git and GitHub Pages.
 - Drafted and edited sections of this project page; we checked every number against our own program output.
 
@@ -562,7 +562,7 @@ The pipeline itself (sensing, estimators, controller and `main.py`) was written 
 
 **Tool:** Copilot (GitHub).
 
-***Purpose**
+**Purpose**
 - Wrote and drafted the commit messages for the repository.
 
 The commits themselves were made by the team.
