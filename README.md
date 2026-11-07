@@ -24,7 +24,7 @@ UR3e model from link on canvas; structure adapted from the 41014 weekly tutorial
 
 ## Individual Contributions
 
-- **Part A (Modelling): Dija.** Developed the UR3e model and analysed its kinematics, observability and controllability.
+- **Part A (Modelling): Dija.**  Developed the UR3e model and analysed its kinematics, observability and controllability.
 - **Part B (Sensing): Alzaid Muhammed.** Solely responsible for sensing: camera calibration, noise handling and frame management for Track B.
 - **Part C (Estimation): Do Nguyen Khoi Nguyen.** Solely responsible for state estimation, developed the moving-cube Extended Kalman Filter (EKF), implemented the joint-state Kalman observer and conducted estimations, accuracy tests and uncertainty evaluation for track B.
 - **Part D (Control): Leon Markovic and Alzaid Muhammed.** Alzaid wrote the inverse kinematics file and modified the LQR controller. 
